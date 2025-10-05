@@ -1,0 +1,365 @@
+from datetime import datetime, timedelta
+from cs50 import SQL
+import shutil
+import os
+
+
+dados_cardapio = [
+{'item':'fritas','preco':38.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+18-1kg+65)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/fritas.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'calabresa acebolada','preco':50.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+24-1kg+88)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/calabresa_acebolada.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'frango','preco':56.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+29-1kg+106)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/frango.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'isca de peixe','preco':62.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+35-1kg+123)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/isca_de_peixe.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'porquinho','preco':62.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+35-1kg+123)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/porquinho.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'isca de contra acebolado','preco':67.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+45-1kg+133)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/isca_de_contra_acebolado.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao','preco':74.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+41-1kg+147)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/camarao.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'lula','preco':75.0,'categoria_id':3,'opcoes':'Tamanho(300g-500g+42-1kg+150)Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':1,'image':'/lula.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/calabresa 300g/contra 300g','preco':144.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/calabresa_300g/contra_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/peixe 300g/frango 300g','preco':144.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/peixe_300g/frango_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/frango 300g','preco':156.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/frango_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/frango 300g/lula 300g','preco':160.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/frango_300g/lula_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/peixe 300g','preco':162.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/peixe 300g/lula 300g','preco':165.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/peixe_300g/lula_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/lula 300g','preco':170.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/lula_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 300g/frango 300g/peixe 300g','preco':174.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_300g/frango_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 300g/frango 300g/lula 300g','preco':179.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_300g/frango_300g/lula_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 300g/lula 300g/peixe 300g','preco':185.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_300g/lula_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/calabresa 500g','preco':115.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/calabresa_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/frango 500g','preco':127.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/frango_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/peixe 500g','preco':138.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'calabresa 500g/frango 500g','preco':144.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/calabresa_500g/frango_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'calabresa 500g/peixe 500g','preco':156.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/calabresa_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/camarao 500g','preco':156.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/camarao_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/carne 500g','preco':156.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/carne_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/lula 500g','preco':160.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/lula_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'calabresa 500g/carne 500g','preco':174.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/calabresa_500g/carne_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/peixe 500g','preco':197.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'lula 500g/peixe 500g','preco':200.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/lula_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/lula 500g','preco':205.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/lula_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/frango 300g/peixe 300g','preco':215.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/frango_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/frango 300g/lula 300g/peixe 300g','preco':220.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/frango_300g/lula_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/frango 300g/lula 300g','preco':220.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/frango_300g/lula_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 300g/camarao 300g/lula 300g/peixe 300g','preco':226.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_300g/camarao_300g/lula_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 300g/frango 300g/lula 300g/peixe 300g','preco':244.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_300g/frango_300g/lula_300g/peixe_300g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/calabresa 500g/contra 500g','preco':236.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/calabresa_500g/contra_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/frango 500g/peixe 500g','preco':236.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/frango_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/lula 500g/peixe 500g','preco':244.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/lula_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},  
+{'item':'fritas 500g/frango 500g/lula 500g','preco':245.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/frango_500g/lula_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},  
+{'item':'fritas 500g/camarao 500g/peixe 500g','preco':256.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/camarao_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fritas 500g/lula 500g/peixe 500g','preco':260.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/lula_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},    
+{'item':'fritas 500g/camarao 500g/lula 500g','preco':268.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/fritas_500g/camarao_500g/lula_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/frango 500g/peixe 500g','preco':290.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/frango_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/frango 500g/lula 500g','preco':291.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/frango_500g/lula_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'camarao 500g/lula 500g/peixe 500g','preco':309.0,'categoria_id':3,'opcoes':'Adicionais(cheddar e bacon+20-cebola empanada+17)','instrucoes':'None','usable_on_qr':0,'image':'/camarao_500g/lula_500g/peixe_500g.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'acai 300ml','preco':20.0,'categoria_id':2,'opcoes':'Complementos(banana-granola-leite em po-leite consensado)Adicionais(morango+3-pacoca+2)','instrucoes':'Modalidade:Montado no copo-Passo 1:uma bola de açaí-complementos-açai ae competar o copo -complementos enfeitando','usable_on_qr':1,'image':'/acai_300ml.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'acai 500ml','preco':27.0,'categoria_id':2,'opcoes':'Complementos(banana-granola-leite em po-leite consensado)Adicionais(morango+3-pacoca+2)','instrucoes':'Modalidade:Montado no copo-Passo 1:uma bola de açaí-complementos-açai ae competar o copo -complementos enfeitando','usable_on_qr':1,'image':'/acai_500ml.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'acai 700ml','preco':35.0,'categoria_id':2,'opcoes':'Complementos(banana-granola-leite em po-leite consensado)Adicionais(morango+3-pacoca+2)','instrucoes':'Modalidade:Montado no copo-Passo 1:uma bola de açaí-complementos-açai ae competar o copo -complementos enfeitando','usable_on_qr':1,'image':'/acai_700ml.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'agua','preco':5.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/agua.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'agua com gas','preco':6.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/agua_com_gas.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'agua de coco','preco':15.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/agua_de_coco.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'amendoim','preco':7.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/amendoim.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'americano','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/americano.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'amstel','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/amstel.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'batidas','preco':25.0,'categoria_id':2,'opcoes':'Destilado(51-velho barreiro-smirnoff+5-cachaca luxo+5-absolut+20)Frutas(abacaxi-acai-banana com canela-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)','instrucoes':'Modalidade:Liquidificador-Passo 1: cortar fruta-Passo 2:45ml de leite condensado-Passo 3:90 ml do destilado-Passo 4:gira 23x-Passo 5:gelo-Passo 6:gira entre 4 a 10 vezes(se o gelo tiver em pedaços pequenos gira menos)-Passo 7:decora taça com leite condensado','usable_on_qr':1,'image':'/batidas.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'batida sem alcool','preco':22.0,'categoria_id':2,'opcoes':'Frutas(abacaxi-acai-banana com canela-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)Base(soda-agua com gas)','instrucoes':'Modalidade:Liquidificador-Passo 1: cortar fruta-Passo 2:45ml de leite condensado-Passo 3:10 ml de água-Passo 3: gira 23x manivela-Passo 4:gelo-Passo 5:bate entre 4 a 10 vezes(se o gelo tiver em pedaços pequenos bate pouco)-Passo 6:decora taça com leite condensado-Passo 7:completa água com gás ou soda-Passo 8:mexer com a colher bailarina comprida','usable_on_qr':1,'image':'/batida_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'bombeirinho','preco':10.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/bombeirinho.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'boulevadier','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Mexido-Passo 1:40 ml de bourbon-Passo 2:30 ml de vermute-Passo 3:30 ml de Campari-Passo 4:gelo-Passo 5:mexe-Passo 6:decora com fatia fina de casca de laranja','usable_on_qr':1,'image':'/boulevadier.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'brahma chopp','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/brahma_chopp.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'budweiser','preco':10.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/budweiser.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'cabeleira do zeze','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Liquidificador-Passo 1:50ml de maracujá-Passo 2:45ml de leite condensado-Passo 3:completa até 250ml com vinho-Passo 4:bate-Passo 5:pá de gelo-Passo 6:bate-Passo 7:decora taça com leite condensado em volta','usable_on_qr':1,'image':'/cabeleira_do_zeze.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'cabeleira do zeze sem alcool','preco':25.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Liquidificador-Passo 1:50ml de maracujá-Passo 2:45ml de leite condensado-Passo 3:1 colher de Tang-Passo 4:completa até 250ml com água-Passo 5:bate-Passo 6:pá de gelo-Passo 7:bate-Passo 8:decora taça com leite condensado em volta','usable_on_qr':1,'image':'/cabeleira_do_zeze_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'caipirinhas','preco':22.0,'categoria_id':2,'opcoes':'Destilado(51-velho barreiro-cachaca luxo+5)Frutas(abacaxi-acai-banana com canela-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)','instrucoes':'Modalidade:Coqueteleira-Passo 1:cortar fruta-Passo 2:uma apertada de limao(só se a fruta não for limao)-Passo 3: 2 colheres de açucar-Passo 4:macerarPasso 5:85ml destilado-Passo 6:gelo-Passo 7:bate coqueteleira ate ficar gelada-Passo 8:decorar taça','usable_on_qr':1,'image':'/caipirinhas.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'caipiroskas','preco':27.0,'categoria_id':2,'opcoes':'Destilado(smirnoff-absolut+13)Frutas(abacaxi-acai-banana com canela-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)','instrucoes':'Modalidade:Coqueteleira-Passo 1:cortar fruta-Passo 2:uma apertada de limao(só se a fruta não for limao)-Passo 3: 2 colheres de açucar-Passo 4:macerarPasso 5:85ml destilado-Passo 6:gelo-Passo 7:bate coqueteleira ate ficar gelada-Passo 8:decorar taça','usable_on_qr':1,'image':'/caipiroskas.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':"caipibeer's",'preco':29.0,'categoria_id':2,'opcoes':'Destilado(velho barreiro-smirnoff+4-cachaca luxo+4)','instrucoes':'Modalidade:Coqueteleira-Passo 1:cortar 1 limão à francesa-Passo 2:25ml de xarope de açúcar-Passo 3:macerar-Passo 4:75ml de destilado-Passo 5:gelo-Passo 6:bate coqueteleira-Passo 7:despeja no copo de 700ml-Passo 8:higieniza a lata-Passo 9:coloca a cerveja aberta no copo-Passo 10:decoração com rodela de limão','usable_on_qr':1,'image':'/caipibeers.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'caipirinha sem alcool','preco':18.0,'categoria_id':2,'opcoes':'Frutas(abacaxi-acai-banana com canela-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)Base(soda-agua com gas)','instrucoes':'Modalidade:coqueteleira-Passo 1:cortar fruta-Passo 2:apertada de limão-Passo 3:2 colheres de açucar-Passo 4:10 ml de agua-Passo 5:macerar-Passo 6:gelo-Passo 7:bate coqueteleira-Passo 8:completa com água com gás ou soda-Passo 9:decorar taça-Passo 10:leve mexida na taça com colher bailarina(comprida)','usable_on_qr':1,'image':'/caipirinha_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'castanha de caju','preco':10.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/castanha_de_caju.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'coca','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/coca.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'coca zero','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/coca_zero.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'corona','preco':11.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/corona.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'corona long neck','preco':15.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/corona_long_neck.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'cuba livre','preco':20.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Modalidade:Montado na taça-Passo 1:85ml rum-Passo 2:gelo até a boca-Passo 3:completa coca-Passo 4:1 dash de limão-Passo 5:decoração com rodela limão','usable_on_qr':1,'image':'/cuba_livre.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'daiquiri','preco':20.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Coqueteleira-Passo 1:40ml de limão espremido ou 3 a 6 morangos-Passo 2:15ml de xarope de açúcar-Passo 3:75ml de rum-Passo 4:gelo-Passo 5:bate-Passo 6:decora com fruta e borda de sal','usable_on_qr':1,'image':'/daiquiri.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'dingle bell','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Liquidificador-Passo 1:Meia banana-Passo 2:1 colher de canela-Passo 3:45ml de leite condensado-Passo 4:completa até 250ml com vinho-Passo 5:bate-Passo 6:gelo-Passo 7:bate-Passo 8:decora taça com leite condensado, 1 rodela de banana com casca, pó de canela por cima e 1 pau de canela na frente da banana','usable_on_qr':1,'image':'/dingle_bell.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},        
+{'item':'dingle bell sem alcool','preco':25.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Liquidificador-Passo 1:Meia banana-Passo 2:1 colher de canela-Passo 3:45ml de leite condensado-Passo 4:1 colher de Tang-Passo 5:completa até 250ml com água-Passo 6:bate-Passo 7:gelo-Passo 8:bate-Passo 9:decora taça com leite condensado, 1 rodela de banana com casca, pó de canela por cima e 1 pau de canela na frente da banana','usable_on_qr':1,'image':'/dingle_bell_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'doses','preco':6.0,'categoria_id':2,'opcoes':'Destilado(51-velho barreiro-rum+2-seagers+2-smirnoff+2-absolut+6-campari+10-tanqueray+10-tequila+10-whisky+10)','instrucoes':'None','usable_on_qr':1,'image':'/doses.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'brhama duplo malte','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/duplo_malte.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'espanhola','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade:Liquidificador-Passo 1:fruta-Passo 2:45ml de leite condensado-Passo 3:completa até 250ml com vinho-Passo 4:bate-Passo 5:gelo-Passo 6:bate-Passo 7:decora com fruta e leite condensado em volta da taça','usable_on_qr':1,'image':'/espanhola.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'espanhola sem alcool','preco':25.0,'categoria_id':2,'opcoes':'Base(soda-agua com gas)','instrucoes':'Modalidade:Liquidificador-Passo 1:fruta-Passo 2:45ml de leite condensado-Passo 3:1 colher de Tang-Passo 4:completa até 250ml com água-Passo 5:bate-Passo 6:gelo-Passo 7:bate-Passo 8:decora com fruta e leite condensado em volta da taça','usable_on_qr':1,'image':'/espanhola_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fanta laranja','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/fanta_laranja.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'fitzgerald','preco':35.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade:Coqueteleira-Passo 1:60ml de gin-Passo 2:25ml de limão siciliano-Passo 3:25ml de xarope-Passo 4:gelo-Passo 5:bate-Passo 6:2 dashes de angostura-Passo 7:decora com casca de limão siciliano','usable_on_qr':1,'image':'/fitzgerald.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'frozen','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/frozen.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'garibaldi','preco':32.0,'categoria_id':2,'opcoes':'None','instrucoes':'Modalidade:Coqueteleira-Passo 1:75ml de Campari-Passo 2:150ml de suco de laranja-Passo 3:gelo-Passo 4:bate-Passo 5:decora com meia lua de laranja','usable_on_qr':1,'image':'/garibaldi.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'gin mojito','preco':30.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade:Montado na taça-Passo 1:30ml de suco de limão-Passo 2:25ml de xarope-Passo 3:8 a 12 folhas de hortelã-Passo 4:amassar hortelã-Passo 5:45ml de gin-Passo 6:gelo até a boca-Passo 7:completa com base-Passo 8:decora com rodela de limão e ponta de hortelã','usable_on_qr':1,'image':'/gin_mojito.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'gin screwdriver','preco':30.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Montado na taça-Passo 1: 45ml de vodka-Passo 2: gelo até a boca-Passo 3: completa com Fanta laranja','usable_on_qr':1,'image':'/gin_screwdriver.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'gin tonica','preco':30.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade:Montado na taça-Passo 1:fruta cortada de diferentes formas-Passo 2:85ml de gin-Passo 3:gelo até a boca-Passo 4:completa com tônica-Passo 5:mexe com a bailarina-Passo 6:1 dash de limão-Passo 7:decora','usable_on_qr':1,'image':'/gin_tonica.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'gin tropical','preco':35.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Montado na taça-Passo 1: fruta(se for abacaxi, amassar)-Passo 2: 60ml de gin-Passo 3: gelo até a boca-Passo 4: completa com Red Bull tropical, soda ou água com gás-Passo 5: decora com fruta','usable_on_qr':1,'image':'/gin_tropical.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'guarana','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/guarana.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'guarana zero','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/guarana_zero.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'guaraviton','preco':6.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/guaraviton.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'h2o','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/h2o.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'heineken','preco':10.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/heineken.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'heineken long neck','preco':15.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/heineken_long_neck.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'heineken zero','preco':11.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/heineken_zero.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'hi-fi','preco':25.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Liquidificador-Passo 1: 75ml de rum-Passo 2: 45ml de leite condensado-Passo 3: 45ml de leite de coco-Passo 4: 3 morangos-Passo 5: bate-Passo 6: gelo-Passo 7: bate-Passo 8: decora taça com leite condensado e coco ralado em volta, 1 morango na borda e coco ralado por cima','usable_on_qr':1,'image':'/hi-fi.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'hohohum','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Batido - Passo 1: Adicionar 45ml de vodka - Passo 2: Adicionar 30ml de triple sec - Passo 3: Adicionar 30ml de suco de limão ou lima da Pérsia - Passo 4: Adicionar gelo - Passo 5: Bater na coqueteleira - Passo 6: Decorar a taça com uma fruta','usable_on_qr':1,'image':'/hohohum.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'kamikaze','preco':25.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Montado - Passo 1: Colocar gelo até a boca da taça - Passo 2: Adicionar 75ml de vodka - Passo 3: Adicionar 45ml de triple sec - Passo 4: Adicionar 15ml de xarope Curaçao - Passo 5: Completar com soda - Passo 6: Decorar com rodela de limão','usable_on_qr':1,'image':'/kamikaze.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'lagoa azul','preco':35.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Montado - Passo 1: Colocar gelo até a boca da taça - Passo 2: Adicionar 75ml de vodka - Passo 3: Adicionar 45ml de triple sec - Passo 4: Adicionar 15ml de xarope Curaçao - Passo 5: Completar com soda - Passo 6: Decorar com rodela de limão','usable_on_qr':1,'image':'/lagoa_azul.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'h2o limoneto','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/h2o_limoneto.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'lorenzo','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Batido - Passo 1: Adicionar 75ml de xarope blue - Passo 2: Adicionar 75ml de água - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Adicionar 60ml de suco de laranja - Passo 5: Adicionar gelo - Passo 6: Bater na coqueteleira - Passo 7: Adicionar mais gelo - Passo 8: Bater novamente - Passo 9: Decorar a taça com leite condensado e meia lua de laranja','usable_on_qr':1,'image':'/lorenzo.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'lorenzo malvadeza','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Batido - Passo 1: Adicionar 65ml de Curaçao blue - Passo 2: Adicionar 75ml de triple sec - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Adicionar 65ml de suco de laranja - Passo 5: Bater na coqueteleira - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Decorar a taça com leite condensado e meia lua de laranja','usable_on_qr':1,'image':'/lorenzo_malvadeza.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'mamae eu posso','preco':25.0,'categoria_id':2,'opcoes':'Base(soda-agua com gas)','instrucoes':'Modalidade: Liquidificado - Passo 1: Adicionar 5ml de água no liquidificador - Passo 2: Adicionar 45ml de leite condensado - Passo 3: Adicionar 45ml de leite de coco - Passo 4: Adicionar 3 morangos - Passo 5: Bater - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Completar o copo - Passo 9: Decorar a borda da taça com leite condensado e coco ralado - Passo 10: Colocar 1 morango na borda e finalizar com coco ralado por cima','usable_on_qr':1,'image':'/mamae_eu_posso.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'mamae eu quero','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Liquidificado - Passo 1: Adicionar 75ml de vodka no liquidificador - Passo 2: Adicionar 45ml de leite condensado - Passo 3: Adicionar 45ml de leite de coco - Passo 4: Adicionar 3 morangos - Passo 5: Bater - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Decorar a borda da taça com leite condensado e coco ralado - Passo 9: Colocar 1 morango na borda e finalizar com coco ralado por cima','usable_on_qr':1,'image':'/mamae_eu_quero.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'manhattan','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Mexido - Passo 1: Adicionar 50ml de bourbon no copo 300ml - Passo 2: Adicionar 25ml de vermute - Passo 3: Adicionar gelo - Passo 4: Mexer - Passo 5: Adicionar 2 dashes de angostura','usable_on_qr':1,'image':'/manhattan.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'maracugin','preco':35.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Montado - Passo 1: Colocar gelo até a boca da taça - Passo 2: Adicionar 50ml de gin - Passo 3: Adicionar 50ml de maracujá - Passo 4: Completar com tônica - Passo 5: Adicionar 3 gotas de essência de baunilha - Passo 6: Decorar com ramo de hortelã','usable_on_qr':1,'image':'/maracugin.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'margarita','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Batido - Passo 1: Adicionar 60ml de tequila - Passo 2: Adicionar 40ml de triple sec - Passo 3: Adicionar 35ml de limão - Passo 4: Adicionar 25ml de xarope - Passo 5: Adicionar gelo - Passo 6: Bater na coqueteleira - Passo 7: Decorar a taça com borda de sal e rodela de limão','usable_on_qr':1,'image':'/margarita.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'milho mostarda e mel','preco':7.0,'categoria_id':2,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/milho.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'mojito','preco':27.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Montado - Passo 1: Adicionar 65ml de suco de limão na taça - Passo 2: Adicionar 25ml de xarope - Passo 3: Adicionar 8 a 12 folhas de hortelã e amassar - Passo 4: Adicionar 65ml de gin - Passo 5: Completar com gelo até a boca - Passo 6: Completar com água com gás ou soda - Passo 7: Decorar com rodela de limão e ponta de hortelã','usable_on_qr':1,'image':'/mojito.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'negroni','preco':25.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Mexido - Passo 1: Adicionar 30ml de gin no copo 300ml - Passo 2: Adicionar 30ml de vermute - Passo 3: Adicionar 30ml de Campari - Passo 4: Adicionar gelo - Passo 5: Mexer - Passo 6: Decorar com casca de laranja em espiral','usable_on_qr':1,'image':'/negroni.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'old fashion','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Montado - Passo 1: Adicionar 50ml de bourbon no copo 300ml - Passo 2: Adicionar 5ml de xarope - Passo 3: Adicionar gelo - Passo 4: Mexer - Passo 5: Adicionar 2 dashes de angostura','usable_on_qr':1,'image':'/old_fashion.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'original','preco':10.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/original.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'penicilin','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Batido - Passo 1: Adicionar 75ml de scotch - Passo 2: Adicionar 35ml de limão siciliano - Passo 3: Adicionar 20ml de xarope de mel - Passo 4: Adicionar colher pequena de gengibre - Passo 5: Adicionar gelo - Passo 6: Bater na coqueteleira - Passo 7: Decorar com casca de limão siciliano','usable_on_qr':1,'image':'/penicilin.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'pink gin','preco':25.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Coqueteleira - Passo 1: Adicionar 90ml de gin - Passo 2: Adicionar 15ml de limão - Passo 3: Adicionar 25ml de xarope - Passo 4: Adicionar gelo - Passo 5: Bater - Passo 6: Decorar com 3 dashes de Angostura + casca de limão siciliano - Passo 7: Mexer de leve.','usable_on_qr':1,'image':'/pink_gin.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'pina colada','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Liquidificado - Passo 1: Adicionar 75ml de rum - Passo 2: Adicionar 45ml de leite de coco - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Adicionar 1 fatia de abacaxi menor - Passo 5: Bater - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Decorar a taça com leite condensado em volta e na borda - Passo 9: Finalizar com coco ralado por cima e uma fruta como decoração','usable_on_qr':1,'image':'/pina_colada.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'pina descolada','preco':25.0,'categoria_id':2,'opcoes':'Base(soda-agua com gas)','instrucoes':'Modalidade: Liquidificado - Passo 1: Adicionar 5ml de água - Passo 2: Adicionar 45ml de leite de coco - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Adicionar 1 fatia de abacaxi menor - Passo 5: Bater - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Decorar a taça com leite condensado em volta e na borda - Passo 9: Finalizar com coco ralado por cima e uma fruta - Passo 10: Completar o copo','usable_on_qr':1,'image':'/pina_descolada.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'pornstar martini','preco':30.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Coqueteleira - Passo 1: Adicionar 85ml de vodka - Passo 2: Adicionar 40ml de maracujá - Passo 3: Adicionar 10ml de limão - Passo 4: Adicionar 15ml de xarope - Passo 5: Adicionar 3 gotas de essência - Passo 6: Bater - Passo 7: Decorar.','usable_on_qr':1,'image':'/pornstar_martini.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'purple dulcet','preco':30.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Liquidificador - Passo 1: Adicionar 1 colher de açaí - Passo 2: Adicionar 45ml de leite condensado - Passo 3: Completar até 250ml com vinho - Passo 4: Bater - Passo 5: Adicionar gelo - Passo 6: Bater novamente - Passo 7: Decorar a taça com leite condensado.','usable_on_qr':1,'image':'/purple_dulcet.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'purple dulcet sem alcool','preco':25.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Liquidificador - Passo 1: Adicionar 1 colher de açaí - Passo 2: Adicionar 45ml de leite condensado - Passo 3: Adicionar 1 colher de Tang - Passo 4: Completar até 250ml com água - Passo 5: Bater - Passo 6: Adicionar gelo - Passo 7: Bater novamente - Passo 8: Decorar a taça com leite condensado.','usable_on_qr':1,'image':'/purple_dulcet_sem_alcool.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'raspadinha','preco':15.0,'categoria_id':2,'opcoes':'Sabor(fruta-groselha-curacau blue+5)','instrucoes':'Modalidade: Liquidificador - Passo 1: Adicionar 75ml de xarope - Passo 2: Adicionar 75ml de água - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Triturar o gelo - Passo 5: Adicionar o gelo triturado - Passo 6: Decorar com leite condensado.','usable_on_qr':1,'image':'/raspadinha.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'raspadinha com vodka','preco':30.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Liquidificador - Passo 1: Adicionar 75ml de xarope - Passo 2: Adicionar 75ml de vodka - Passo 3: Adicionar 45ml de leite condensado - Passo 4: Triturar o gelo - Passo 5: Adicionar o gelo triturado - Passo 6: Decorar com leite condensado.','usable_on_qr':1,'image':'/raspadinha_com_vodka.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'red bull','preco':15.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/red_bull.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'saquerita','preco':27.0,'categoria_id':2,'opcoes':'Frutas(abacaxi-acai-banana-)','instrucoes':'Modalidade:Coqueteleira-(Passo 1: cortar fruta-Passo 2: 2 colheres de acucar-Passo 3: macerar-Passo 4: 85 ml de saque-Passo 5: encher de gelo-Passo 6: chacoalhar chiq-chiq)','usable_on_qr':1,'image':'/saquerita.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'sex on the beach','preco':25.0,'categoria_id':2,'opcoes':'Vodka(Absolut+5-Smirnoff)','instrucoes':'Modalidade: Taça - Passo 1: Adicionar 65ml de vodka - Passo 2: Adicionar 55ml de suco de pêssego - Passo 3: Completar com gelo até a boca - Passo 4: Completar com suco de laranja - Passo 5: Adicionar 10ml de groselha - Passo 6: Decorar com meia lua de laranja.','usable_on_qr':1,'image':'/sex_on_the_beach.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'skol','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/skol.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'soda','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/soda.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'soda italiana','preco':15.0,'categoria_id':2,'opcoes':'Sabor(groselha-curacau blue+5)','instrucoes':'Modalidade: Copo - Passo 1: Adicionar 75ml de xarope - Passo 2: Adicionar 2 dashes de limão - Passo 3: Completar com gelo até a boca - Passo 4: Completar com água com gás - Passo 5: Decorar com rodela de limão.','usable_on_qr':1,'image':'/soda_italiana.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'southrise','preco':22,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'Modalidade: Coqueteleira-Passo 1: adicionar 40ml de limão-Passo 2: adicionar 25ml de xarope-Passo 3: adicionar 7 folhas de hortelã-Passo 4: amassar hortelã-Passo 5: adicionar 50ml de gin-Passo 6: adicionar gelo-Passo 7: bater coqueteleira-Passo 8: decorar com folha de hortelã','usable_on_qr':1,'image':'/22.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'spaten','preco':10.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/spaten.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'suco','preco':16.0,'categoria_id':2,'opcoes':'Frutas(abacaxi-acai-caju-kiwi-limao-limao siciliano-lima da persia-manga-maracuja-melancia-morango-tangerina)Adicional(leite condensado+2)','instrucoes':'Modalidade: Liquidificador-Passo 1: adicionar fruta-Passo 2: adicionar leite condensado e mais fruta-Passo 3: adicionar 250ml de água-Passo 4: bater 20 vezes no liquidificador-Passo 5: adicionar gelo-Passo 6: bater 5 vezes devagar-Passo 7: decorar com fruta','usable_on_qr':1,'image':'/suco.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'itaipava','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/itaipava.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'tequila sunrise','preco':35.0,'categoria_id':2,'opcoes':'','instrucoes':'Modalidade: Montado-Passo 1: usar taça-Passo 2: adicionar 60ml de tequila-Passo 3: adicionar gelo até a boca-Passo 4: completar com 135ml de suco de laranja-Passo 5: adicionar 1 dash de groselha-Passo 6: decorar com meia lua de laranja','usable_on_qr':1,'image':'/tequila_sunrise.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'agua tonica','preco':8.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/tonica.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'red bull tropical','preco':15.0,'categoria_id':1,'opcoes':'','instrucoes':'None','usable_on_qr':1,'image':'/red_bull_tropical.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'white lady','preco':30.0,'categoria_id':2,'opcoes':'Gin(seagers-tanqueray+10)','instrucoes':'None','usable_on_qr':1,'image':'/white_lady.png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+{'item':'whisky com energetico (copao)','preco':35.0,'categoria_id':2,'opcoes':'None','instrucoes':'Modalidade: Montado-Passo 1: usar copo 700ml-Passo 2: adicionar 75ml de whisky-Passo 3: adicionar gelo-Passo 4: adicionar 1 energético completo','usable_on_qr':1,'image':'/whisky_com_energetico_(copao).png', 'quantidade':None, 'quantidade_ideal':None, 'subcategoria':None,'subsubcategoria':None},
+]
+
+dados_estoque = [
+    {'item':'absolut','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'acucar','quantidade':6.0,'estoque_ideal':13.0},
+{'item':'adocante','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'agua','quantidade':760.0,'estoque_ideal':13.0},
+{'item':'agua com gas','quantidade':56.0,'estoque_ideal':13.0},
+{'item':'amaretto','quantidade':19.0,'estoque_ideal':13.0},
+{'item':'amstel','quantidade':37.0,'estoque_ideal':13.0},
+{'item':'angostura','quantidade':20.0,'estoque_ideal':13.0},
+{'item':'brahma chop','quantidade':12.0,'estoque_ideal':13.0},
+{'item':'brahma duplo malte','quantidade':34.0,'estoque_ideal':13.0},
+{'item':'budweiser','quantidade':30.0,'estoque_ideal':13.0},
+{'item':'cafe','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'campari','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'canudo fino','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'canudo grosso','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'coca','quantidade':51.0,'estoque_ideal':13.0},
+{'item':'coca zero','quantidade':42.0,'estoque_ideal':13.0},
+{'item':'coco','quantidade':20.0,'estoque_ideal':13.0},
+{'item':'coco ralado','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'corona','quantidade':25.0,'estoque_ideal':13.0},
+{'item':'cop 150','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'cop 200','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'cop 330','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'cop 440','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'cop 770','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'curacau blue','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'fernet','quantidade':19.0,'estoque_ideal':13.0},
+{'item':'fanta','quantidade':23.0,'estoque_ideal':13.0},
+{'item':'guarana','quantidade':35.0,'estoque_ideal':13.0},
+{'item':'guarana zero','quantidade':14.0,'estoque_ideal':13.0},
+{'item':'guaraviton','quantidade':19.0,'estoque_ideal':13.0},
+{'item':'heineken','quantidade':98.0,'estoque_ideal':13.0},
+{'item':'heineken zero','quantidade':15.0,'estoque_ideal':13.0},
+{'item':'h2o','quantidade':13.0,'estoque_ideal':13.0},
+{'item':'h2o limoneto','quantidade':16.0,'estoque_ideal':13.0},
+{'item':'itaipava','quantidade':16.0,'estoque_ideal':13.0},
+{'item':'leite condensado','quantidade':11.0,'estoque_ideal':13.0},
+{'item':'leite de coco','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'licor de cafe','quantidade':20.0,'estoque_ideal':13.0},
+{'item':'matuta','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'original','quantidade':34.0,'estoque_ideal':13.0},
+{'item':'pacoca','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'red bull','quantidade':5.0,'estoque_ideal':5.0},
+{'item':'rum','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'saco de lixo','quantidade':10.0,'estoque_ideal':13.0},
+{'item':'sagatiba','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'saint francisco','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'seagers','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'seleta','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'smirnoff','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'soda','quantidade':13.0,'estoque_ideal':13.0},
+{'item':'suco de pessego','quantidade':8.0,'estoque_ideal':13.0},
+{'item':'tanqueray','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'tequila','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'tonica','quantidade':15.0,'estoque_ideal':13.0},
+{'item':'triple sec','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'tropical','quantidade':5.0,'estoque_ideal':5.0},
+{'item':'velho barreiro','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'vermouth','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'vinho','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'vinho branco','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'whisky bourbon','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'whisky scooth','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'skol','quantidade':33.0,'estoque_ideal':13.0},
+{'item':'heineken long neck','quantidade':20.0,'estoque_ideal':13.0},
+{'item':'corona long neck','quantidade':29.0,'estoque_ideal':13.0},
+{'item':'spaten','quantidade':24.0,'estoque_ideal':13.0},
+{'item':'leite em po','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'mel','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'pano','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'essencia de baunilha','quantidade':2.0,'estoque_ideal':11.0},
+{'item':'detergente','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'bucha','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'guardanapo','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'sal','quantidade':2.0,'estoque_ideal':13.0},
+{'item':'colheres','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'curacau blue alcool','quantidade':3.0,'estoque_ideal':13.0},
+{'item':'51','quantidade':4.0,'estoque_ideal':13.0},
+{'item':'Whoop5.0','quantidade':1.0,'estoque_ideal':3.0}
+]
+
+dados_estoque_geral = [
+{'item':'agua','quantidade':310,'estoque_ideal':540},
+{'item':'agua c/ gas','quantidade':214,'estoque_ideal':289},
+{'item':'agua tonica','quantidade':63,'estoque_ideal':48},
+{'item':'amstel','quantidade':192,'estoque_ideal':504},
+{'item':'brahma chop','quantidade':132,'estoque_ideal':180},
+{'item':'duplo malte','quantidade':144,'estoque_ideal':324},
+{'item':'budweiser','quantidade':204,'estoque_ideal':324},
+{'item':'coca cola zero','quantidade':144,'estoque_ideal':288},
+{'item':'coca cola','quantidade':276,'estoque_ideal':540},
+{'item':'corona','quantidade':194,'estoque_ideal':180},
+{'item':'corona long','quantidade':60,'estoque_ideal':96},
+{'item':'fanta laranja','quantidade':72,'estoque_ideal':132},
+{'item':'guarana','quantidade':190,'estoque_ideal':150},
+{'item':'guarana zero','quantidade':34,'estoque_ideal':96},
+{'item':'guaraviton','quantidade':48,'estoque_ideal':96},
+{'item':'h2o','quantidade':48,'estoque_ideal':48},
+{'item':'h2o limoneto','quantidade':85,'estoque_ideal':96},
+{'item':'heineken','quantidade':562,'estoque_ideal':720},
+{'item':'heineken long','quantidade':72,'estoque_ideal':96},
+{'item':'heineken 0','quantidade':108,'estoque_ideal':180},
+{'item':'itaipava','quantidade':120,'estoque_ideal':120},
+{'item':'original','quantidade':144,'estoque_ideal':252},
+{'item':'red bull','quantidade':30,'estoque_ideal':18},
+{'item':'red bull tropical','quantidade':20,'estoque_ideal':18},
+{'item':'skol','quantidade':180,'estoque_ideal':300},
+{'item':'soda','quantidade':54,'estoque_ideal':96},
+{'item':'sapaten','quantidade':108,'estoque_ideal':96},
+{'item':'suco de pessego','quantidade':0,'estoque_ideal':18},
+{'item':'51','quantidade':23,'estoque_ideal':18},
+{'item':'absolut','quantidade':3,'estoque_ideal':8},
+{'item':'angostura','quantidade':1,'estoque_ideal':2},
+{'item':'campari','quantidade':2,'estoque_ideal':4},
+{'item':'curaçau blue alcool','quantidade':2,'estoque_ideal':2},
+{'item':'curaçau blue','quantidade':5,'estoque_ideal':4},
+{'item':'groselha','quantidade':11,'estoque_ideal':18},
+{'item':'matuta','quantidade':6,'estoque_ideal':4},
+{'item':'rum','quantidade':8,'estoque_ideal':6},
+{'item':'seleta','quantidade':2,'estoque_ideal':2},
+{'item':'smirnoff','quantidade':37,'estoque_ideal':60},
+{'item':'sao francisco','quantidade':5,'estoque_ideal':6},
+{'item':'seagers','quantidade':7,'estoque_ideal':4},
+{'item':'saque','quantidade':9,'estoque_ideal':14},
+{'item':'tanqueray','quantidade':4,'estoque_ideal':6},
+{'item':'tequila','quantidade':2,'estoque_ideal':2},
+{'item':'triple sec','quantidade':4,'estoque_ideal':6},
+{'item':'velho barreiro','quantidade':48,'estoque_ideal':74},
+{'item':'vermute','quantidade':5,'estoque_ideal':6},
+{'item':'vinho','quantidade':14,'estoque_ideal':14},
+{'item':'vinho branco','quantidade':9,'estoque_ideal':4},
+{'item':'whisky bourbon','quantidade':4,'estoque_ideal':4},
+{'item':'whisky scooth','quantidade':3,'estoque_ideal':4},
+{'item':'canudo fino','quantidade':26,'estoque_ideal':8},
+{'item':'canudo grosso','quantidade':12,'estoque_ideal':14},
+{'item':'colheres','quantidade':28,'estoque_ideal':6},
+{'item':'copo 150','quantidade':7,'estoque_ideal':8},
+{'item':'copo 200','quantidade':15,'estoque_ideal':8},
+{'item':'copo 330','quantidade':22,'estoque_ideal':8},
+{'item':'copo 440','quantidade':14,'estoque_ideal':8},
+{'item':'copo 770','quantidade':6,'estoque_ideal':8},
+{'item':'guardanapo','quantidade':63,'estoque_ideal':14},
+{'item':'papel sufilme','quantidade':5,'estoque_ideal':4},
+{'item':'sal','quantidade':86,'estoque_ideal':4},
+{'item':'açai','quantidade':3,'estoque_ideal':8},
+{'item':'açucar','quantidade':11,'estoque_ideal':14},
+{'item':'adoçante','quantidade':3,'estoque_ideal':4},
+{'item':'bucha','quantidade':6,'estoque_ideal':10},
+{'item':'café','quantidade':0,'estoque_ideal':2},
+{'item':'coco ralado','quantidade':3,'estoque_ideal':4},
+{'item':'detergente','quantidade':2,'estoque_ideal':4},
+{'item':'essência de baunilha','quantidade':10,'estoque_ideal':4},
+{'item':'leite condensado','quantidade':0,'estoque_ideal':120},
+{'item':'leite de coco','quantidade':5,'estoque_ideal':6},
+{'item':'leite em pó','quantidade':0,'estoque_ideal':4},
+{'item':'mel','quantidade':6,'estoque_ideal':4},
+{'item':'paçoca','quantidade':1,'estoque_ideal':2},
+{'item':'pano','quantidade':0,'estoque_ideal':6},
+{'item':'saco de lixo 100l','quantidade':27,'estoque_ideal':30},
+{'item':'tang ','quantidade':144,'estoque_ideal':64}
+]
+
+
+
+
+
+
+
+
+
+
+
+var = True
+if var:
+    DATABASE_PATH = "/data/dados.db"
+    if not os.path.exists(DATABASE_PATH):
+        shutil.copy("dados.db", DATABASE_PATH)
+    db = SQL("sqlite:///" + DATABASE_PATH)
+    db.execute("DROP TABLE IF EXISTS cardapio")
+    db.execute("DROP TABLE IF EXISTS estoque")
+    db.execute("DROP TABLE IF EXISTS estoque_geral")
+    db.execute("CREATE TABLE IF NOT EXISTS cardapio (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, preco REAL, categoria_id INTEGER, opcoes TEXT, instrucoes TEXT, image TEXT, preco_base REAL, usable_on_qr INTEGER DEFAULT 1,subcategoria TEXT, subsubcategoria TEXT)")
+    for row in dados_cardapio:
+        db.execute(
+            "INSERT INTO cardapio (item, preco, categoria_id, opcoes, instrucoes, image, preco_base, usable_on_qr, subcategoria, subsubcategoria) VALUES (?, ?, ?, ?, ?,?,?,?,?,?)",
+            row.get('item',None), row.get('preco',None), row.get('categoria_id',None), row.get('opcoes',None), row.get('instrucoes',None), row.get('image',None), row.get('preco',None), row.get('usable_on_qr',0),row.get('subcategoria',None), row.get('subsubcategoria',None)
+            )
+    db.execute(
+            "CREATE TABLE IF NOT EXISTS estoque (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, quantidade REAL, estoque_ideal REAL)"
+     )
+    for row in dados_estoque:
+        db.execute(
+            "INSERT INTO estoque (item, quantidade, estoque_ideal) VALUES (?, ?, ?)",
+            row.get('item',None), row.get('quantidade',None), row.get('estoque_ideal',None)
+            )
+    db.execute(
+            "CREATE TABLE IF NOT EXISTS estoque_geral (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, quantidade REAL, estoque_ideal REAL)"
+     )
+    for row in dados_estoque_geral:
+        db.execute(
+            "INSERT INTO estoque_geral (item, quantidade, estoque_ideal) VALUES (?, ?, ?)",
+            row.get('item',None), row.get('quantidade',None), row.get('estoque_ideal',None)
+            )
+       
+    
+
+else:
+    db = SQL('sqlite:///data/dados.db')
+
+    hoje = datetime.now().date()
+    print(hoje)
+    estoque_list = db.execute('SELECT * FROM estoque_geral')
+    for row in estoque_list:
+        print('{',end='')
+        print(f"'item':'{row.get('item')}'",end=',')
+        print(f"'quantidade':{row.get('quantidade',None)}",end=',')
+        print(f"'estoque_ideal':{row.get('estoque_ideal',None)}",end='},\n')
+
+
+
