@@ -4,7 +4,7 @@
     "slug": "testando-api",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/icon.jpg",
     "updates": {
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/7e480f65-cc6b-476f-b57d-270e50206802"
