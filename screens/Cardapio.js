@@ -22,11 +22,14 @@ export default class ScreenCardapio extends React.Component {
   get defaultOpcoes() {
     return [
       {
-        titulo: '',
-        conteudo: [''],
+        nome: '',
+        ids: '',
+        max_selected: 1,
+        options: [{ nome: '', valor_extra: 0 }],
       },
     ];
   }
+  
 
   static contextType = UserContext;
 
@@ -54,12 +57,7 @@ export default class ScreenCardapio extends React.Component {
       tamanho: '',
       instrucao: '',
       selecionado: [],
-      opcoes: [
-        {
-          titulo: '',
-          conteudo: [''],
-        },
-      ],
+      opcoes: this.defaultOpcoes,
       sugsModal: [],
 
     };
@@ -106,6 +104,69 @@ export default class ScreenCardapio extends React.Component {
     // fallback
     return '';
   };
+  sanitizeOpcoes = (ops = []) =>
+  (Array.isArray(ops) ? ops : [])
+    .map(g => ({
+      ...g,
+      options: (g.options || []).filter(o => String((o && o.nome) || '').trim())
+    }))
+    // mantém o grupo só se sobrar ao menos 1 opção com nome
+    .filter(g => (g.options || []).length > 0);
+
+  parseLegacyOpcoes = (legacyStr) => {
+    // Ex.: "Frutas(morango-melancia-manga+2)Complementos(banana-leite-leite condensado+2)"
+    const re = /([^(]+)\(([^)]*)\)/g;
+    const groups = [];
+    let m;
+    while ((m = re.exec(String(legacyStr))) !== null) {
+      const gname = m[1].trim();
+      const body = m[2].trim();
+      if (!body) {
+        groups.push({ nome: gname, ids: '', max_selected: 1, options: [] });
+        continue;
+      }
+      const options = body.split('-').map(tok => {
+        tok = tok.trim();
+        const mm = tok.match(/^(.*?)(?:\+(\d+))?$/);
+        const nome = (mm?.[1] || '').trim();
+        const valor_extra = mm?.[2] ? Number(mm[2]) : 0;
+        return { nome, valor_extra };
+      });
+      groups.push({ nome: gname, ids: '', max_selected: 1, options });
+    }
+    return groups.length ? groups : this.defaultOpcoes;
+  };
+  
+  normalizeGroupsFromDB = (raw) => {
+    // Aceita: objeto/array já no formato novo, string JSON do novo formato, ou string legada
+    if (!raw) return this.defaultOpcoes;
+  
+    try {
+      // se for JSON string do formato novo
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (Array.isArray(parsed)) {
+        return parsed.map(g => ({
+          nome: g?.nome ?? '',
+          ids: g?.ids ?? '',
+          max_selected: Number(g?.max_selected ?? 1) || 1,
+          options: Array.isArray(g?.options)
+            ? g.options.map(o => ({
+                nome: o?.nome ?? String(o ?? ''),
+                valor_extra: Number(o?.valor_extra ?? 0) || 0,
+              }))
+            : [],
+        }));
+      }
+    } catch (_) {
+      // não era JSON → pode ser string legada
+    }
+  
+    // tenta legado "Titulo(a-b+2)"
+    if (typeof raw === 'string') return this.parseLegacyOpcoes(raw);
+  
+    return this.defaultOpcoes;
+  };
+  
   openEditFor = (it) => {
     this.setState(
       {
@@ -235,39 +296,62 @@ searchModal = (text, limit = 5) => {
     this.socket.emit('getItemCardapio', { item: sugestao.item });
     this.socket.once('respostaGetItemCardapio', (data) => {
       if (data.opcoes) {
-        this.setState({ opcoes: data.opcoes });
+        const group = this.normalizeGroupsFromDB(data.opcoes);
+        this.setState({ opcoes: group });
       }
     });
   }
 
   adicionarOpcao = () => {
-    this.setState((prevState) => ({
-      opcoes: [...prevState.opcoes, { titulo: '', conteudo: [''] }],
+    this.setState(prev => ({
+      opcoes: [...prev.opcoes, { nome: '', ids: '', max_selected: 1, options: [{ nome: '', valor_extra: 0 }] }],
     }));
   };
 
-  removerConteudo = (opcaoIndex, conteudoIndex) => {
-    const novasOpcoes = [...this.state.opcoes];
-    novasOpcoes[opcaoIndex].conteudo.splice(conteudoIndex, 1);
-    this.setState({ opcoes: novasOpcoes });
+  removerConteudo = (groupIndex, optionIndex) => {
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].options.splice(optionIndex, 1);
+    this.setState({ opcoes });
   };
 
-  removerOpcao = (opcaoIndex) => {
-    const novasOpcoes = [...this.state.opcoes];
-    novasOpcoes.splice(opcaoIndex, 1);
-    this.setState({ opcoes: novasOpcoes });
+  removerOpcao = (groupIndex) => {
+    const opcoes = [...this.state.opcoes];
+    opcoes.splice(groupIndex, 1);
+    this.setState({ opcoes: opcoes.length ? opcoes : this.defaultOpcoes });
   };
 
-  adicionarConteudo = (index) => {
-    const novasOpcoes = [...this.state.opcoes];
-    novasOpcoes[index].conteudo.push('');
-    this.setState({ opcoes: novasOpcoes });
+  adicionarConteudo = (groupIndex) => {
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].options.push({ nome: '', valor_extra: 0 });
+    this.setState({ opcoes });
   };
 
   atualizarTitulo = (index, texto) => {
     const novasOpcoes = [...this.state.opcoes];
     novasOpcoes[index].titulo = texto;
     this.setState({ opcoes: novasOpcoes });
+  };
+  atualizarNomeGrupo = (groupIndex, text) => {
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].nome = text;
+    this.setState({ opcoes });
+  };
+  atualizarMaxSelected = (groupIndex, text) => {
+    const n = Math.max(1, parseInt(text || '1', 10) || 1);
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].max_selected = n;
+    this.setState({ opcoes });
+  };
+  atualizarOptionNome = (groupIndex, optionIndex, text) => {
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].options[optionIndex].nome = text;
+    this.setState({ opcoes });
+  };
+  atualizarOptionExtra = (groupIndex, optionIndex, text) => {
+    const v = Number(text.replace(',', '.')) || 0;
+    const opcoes = [...this.state.opcoes];
+    opcoes[groupIndex].options[optionIndex].valor_extra = v;
+    this.setState({ opcoes });
   };
 
   atualizarConteudo = (opcaoIndex, conteudoIndex, texto) => {
@@ -302,15 +386,15 @@ searchModal = (text, limit = 5) => {
     const { user } = this.context;
 
     if (titleEnv === 'Adicionar') {
-      this.socket.emit('adicionarCardapio', {
-        categoria,
-        modalidade,
-        item: AdicionarItem,
-        preco: AdicionarPreco,
-        opcoes: opcoes,
-        username: user.username,
-        token: user.token,
+      console.log('Enviando adicionar:', {
+        categoria, modalidade, item: AdicionarItem, preco: AdicionarPreco,
+        opcoes: this.sanitizeOpcoes(opcoes),opcoes_2:opcoes, username: user.username, token: user.token
       });
+      this.socket.emit('adicionarCardapio', {
+        categoria, modalidade, item: AdicionarItem, preco: AdicionarPreco,
+        opcoes: this.sanitizeOpcoes(opcoes), username: user.username, token: user.token
+      });
+      this.setState({ opcoes: this.defaultOpcoes });
     } else if (titleEnv === 'Editar') {
       this.socket.emit('editarCardapio', {
         categoria,
@@ -318,7 +402,7 @@ searchModal = (text, limit = 5) => {
         item: AdicionarItem,
         preco: AdicionarPreco,
         novoNome: AdicionarNovoNome,
-        opcoes: opcoes,
+        opcoes: this.sanitizeOpcoes(opcoes),
         username: user.username,
         token: user.token,
       });
@@ -604,51 +688,62 @@ searchModal = (text, limit = 5) => {
                   {/* Blocos de opções (apenas quando categoria ≠ Restante e não for remover) */}
                   {!showInputsRemover && (
                     <View style={{ padding: 15 }}>
-                      {this.state.opcoes.map((opcao, opcaoIndex) => (
+                      {this.state.opcoes.map((grupo, gIdx) => (
                         <View
-                          key={`opcao-${opcaoIndex}`}
+                          key={`grupo-${gIdx}`}
                           style={{
-                            borderWidth: 1,
-                            borderColor: '#ccc',
-                            padding: 10,
-                            marginBottom: 20,
-                            borderRadius: 8,
+                            borderWidth: 1, borderColor: '#ccc',
+                            padding: 12, marginBottom: 20, borderRadius: 8,
                           }}
                         >
-                          <Text style={styles.inputLabel}>Título da Seção</Text>
+                          <Text style={styles.inputLabel}>Nome da Seção</Text>
                           <TextInput
                             style={styles.inputSimples}
-                            placeholder="Digite o título"
+                            placeholder="Ex.: Frutas, Complementos..."
                             placeholderTextColor="#999"
-                            value={opcao.titulo}
-                            onChangeText={(text) => this.atualizarTitulo(opcaoIndex, text)}
+                            value={grupo.nome}
+                            onChangeText={(t) => this.atualizarNomeGrupo(gIdx, t)}
                           />
 
-                          <Text style={[styles.inputLabel, { marginTop: 10 }]}>Conteúdos:</Text>
-                          {opcao.conteudo.map((conteudo, conteudoIndex) => {
-                            const ehUltimo = conteudoIndex === opcao.conteudo.length - 1;
+                          <Text style={[styles.inputLabel, { marginTop: 10 }]}>Máximo de Seleções</Text>
+                          <TextInput
+                            style={styles.inputSimples}
+                            placeholder="1"
+                            placeholderTextColor="#999"
+                            keyboardType="numeric"
+                            value={String(grupo.max_selected ?? 1)}
+                            onChangeText={(t) => this.atualizarMaxSelected(gIdx, t)}
+                          />
+
+                          <Text style={[styles.inputLabel, { marginTop: 10 }]}>Opções</Text>
+
+                          {grupo.options.map((opt, oIdx) => {
+                            const ehUltimo = oIdx === grupo.options.length - 1;
                             return (
                               <View
-                                key={`opcoes-${opcaoIndex}-conteudo-${conteudoIndex}`}
-                                style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+                                key={`g${gIdx}-opt${oIdx}`}
+                                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}
                               >
                                 <TextInput
-                                  style={[styles.inputSimples, { flex: 1, marginRight: 10 }]}
-                                  placeholder="Digite o conteúdo"
+                                  style={[styles.inputSimples, { flex: 1 }]}
+                                  placeholder="Nome da opção (ex.: manga)"
                                   placeholderTextColor="#999"
-                                  value={conteudo}
-                                  onChangeText={(text) => this.atualizarConteudo(opcaoIndex, conteudoIndex, text)}
+                                  value={opt.nome}
+                                  onChangeText={(t) => this.atualizarOptionNome(gIdx, oIdx, t)}
+                                />
+                                <TextInput
+                                  style={[styles.inputSimples, { width: 110 }]}
+                                  placeholder="Extra (ex.: 2)"
+                                  placeholderTextColor="#999"
+                                  keyboardType="numeric"
+                                  value={String(opt.valor_extra ?? 0)}
+                                  onChangeText={(t) => this.atualizarOptionExtra(gIdx, oIdx, t)}
                                 />
                                 <TouchableOpacity
-                                  onPress={() =>
-                                    ehUltimo
-                                      ? this.adicionarConteudo(opcaoIndex)
-                                      : this.removerConteudo(opcaoIndex, conteudoIndex)
-                                  }
+                                  onPress={() => ehUltimo ? this.adicionarConteudo(gIdx) : this.removerConteudo(gIdx, oIdx)}
                                   style={{
                                     backgroundColor: ehUltimo ? '#000' : '#ff3b30',
-                                    padding: 10,
-                                    borderRadius: 100,
+                                    padding: 10, borderRadius: 100,
                                   }}
                                 >
                                   <Text style={{ color: 'white', fontSize: 18 }}>{ehUltimo ? '+' : '-'}</Text>
@@ -658,29 +753,21 @@ searchModal = (text, limit = 5) => {
                           })}
 
                           <TouchableOpacity
-                            onPress={this.adicionarOpcao}
+                            onPress={() => this.adicionarConteudo(gIdx)}
                             style={{
-                              marginTop: 10,
-                              alignSelf: 'flex-start',
-                              backgroundColor: '#007bff',
-                              paddingVertical: 6,
-                              paddingHorizontal: 12,
-                              borderRadius: 5,
+                              marginTop: 8, alignSelf: 'flex-start',
+                              backgroundColor: '#007bff', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 5,
                             }}
                           >
-                            <Text style={{ color: 'white' }}>+ Nova Seção</Text>
+                            <Text style={{ color: 'white' }}>+ Nova Opção</Text>
                           </TouchableOpacity>
 
                           {this.state.opcoes.length > 1 && (
                             <TouchableOpacity
-                              onPress={() => this.removerOpcao(opcaoIndex)}
+                              onPress={() => this.removerOpcao(gIdx)}
                               style={{
-                                marginTop: 10,
-                                alignSelf: 'flex-start',
-                                backgroundColor: '#ff3b30',
-                                paddingVertical: 6,
-                                paddingHorizontal: 12,
-                                borderRadius: 5,
+                                marginTop: 10, alignSelf: 'flex-start',
+                                backgroundColor: '#ff3b30', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 5,
                               }}
                             >
                               <Text style={{ color: 'white' }}>Remover Seção</Text>
@@ -688,6 +775,16 @@ searchModal = (text, limit = 5) => {
                           )}
                         </View>
                       ))}
+
+                      <TouchableOpacity
+                        onPress={this.adicionarOpcao}
+                        style={{
+                          marginTop: 4, alignSelf: 'flex-start',
+                          backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 6,
+                        }}
+                      >
+                        <Text style={{ color: 'white', fontWeight: '600' }}>+ Nova Seção</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
 

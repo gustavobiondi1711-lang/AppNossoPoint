@@ -56,6 +56,7 @@ export const PrinterService = {
       `Pedido: ${pedido}\n` +
       `Quant: ${quant}\n` +
       (extra ? `Extra: ${extra}\n` : '') +
+      (opcoes? `Opções: ${opcoes}\n` : '') +
       `Hora: ${hora}\n` +
       `SendBy: ${sendBy}\n` +
       '\x1B\x21\x00';    // reset

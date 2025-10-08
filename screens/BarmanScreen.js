@@ -96,6 +96,7 @@ export default class BarmanScreen extends React.Component {
         mesa: data.mesa,
         pedido: data.pedido,
         quant: data.quantidade,
+        opcoes: data.opcoes,
         extra: data.extra,
         hora: data.hora,
         sendBy: data.sendBy,
@@ -133,6 +134,7 @@ export default class BarmanScreen extends React.Component {
             mesa: order.mesa,
             pedido: order.pedido,
             quant: order.quantidade,
+            opcoes: order.opcoes,
             extra: order.extra,
             hora: order.hora,
             sendBy: order.sendBy,
@@ -202,10 +204,47 @@ export default class BarmanScreen extends React.Component {
   /** chave do grupo = pedido + extra (normalizados) */
   getGroupKey = (item) => {
     const p = this.normalizeKey(item.pedido);
+    const i  = this.normalizeKey(item.opcoes);
     const e = this.normalizeKey(item.extra);
-    return `${p}|${e}`;
+    return `${p}|${e}|${i}`;
   };
-  
+ // Aceita string JSON, objeto único ou array de grupos.
+// Retorna "Grupo: opt1, opt2 | Outro: optA, optB" (sem preços e sem prefixo "Opções:")
+formatOpcoesText = (raw) => {
+  if (!raw) return '';
+  let data;
+  try {
+    data = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+  } catch {
+    return '';
+  }
+
+  // Normaliza para array de grupos
+  let groups = [];
+  if (Array.isArray(data)) {
+    groups = data;
+  } else if (data && typeof data === 'object') {
+    // caso: um único grupo { nome, options, ... }
+    if (Array.isArray(data.options)) groups = [data];
+  }
+  if (!groups.length) return '';
+
+  const parts = groups.map((g) => {
+    const groupName = (g && g.nome) ? String(g.nome).trim() : '';
+    const opts = (g && Array.isArray(g.options) ? g.options : [])
+      .map(o => (o && String(o.nome || '').trim()))
+      .filter(Boolean);               // ignora opção sem nome
+    if (!opts.length) return '';
+    const optsTxt = opts.join(', ');
+    return groupName ? `${groupName}: ${optsTxt}` : optsTxt;
+  }).filter(Boolean);
+
+  return parts.join(' | ');
+};
+
+
+
+
   /** 
    * Gera contagem e cor por grupo.
    * countMode: 'rows' (nº de linhas iguais) ou 'qty' (soma de item.quantidade)
@@ -282,12 +321,24 @@ export default class BarmanScreen extends React.Component {
           <Text style={styles.itemName} numberOfLines={1}>
             {item.pedido}
           </Text>
-  
-          {!!item.extra && (
-            <Text style={styles.itemExtra}>
-              {item.extra}
-            </Text>
-          )}
+          
+          {(() => {
+              const opcoesFmt = this.formatOpcoesText(item.opcoes);
+              const hasOpcoes = !!opcoesFmt;
+              const extraTxt = (item.extra || '').trim();
+              const hasExtra = !!extraTxt;
+
+              if (!hasOpcoes && !hasExtra) return null;
+
+              return (
+                <Text style={styles.itemExtra}>
+                  {hasOpcoes ? opcoesFmt : ''}
+                  {hasOpcoes && hasExtra ? ' • ' : ''}
+                  {hasExtra ? `${extraTxt}` : ''}
+                </Text>
+              );
+            })()}
+
   
           <Text style={styles.comandaText}>
             Comanda {item.comanda}
