@@ -1,6 +1,8 @@
 from flask import send_from_directory
 import atexit
-import base64
+import unicodedata
+import qrcode
+from qrcode.constants import ERROR_CORRECT_Q
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -24,6 +26,7 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 import jwt
 import json
+import os, io, base64, re, unicodedata 
 
 
 from werkzeug.utils import secure_filename
@@ -43,12 +46,17 @@ app.config['SECRET_KEY'] = 'seu_segredo_aqui'
 socketio = SocketIO(app, cors_allowed_origins="*")  
 import shutil
 
-SECRET_KEY = "minha_chave_super_secreta"
+SECRET_KEY = "sua_chave_super_secreta_aqui"
 
 load_dotenv()
 ACCOUNT_SID = os.getenv("ACCOUNT_SID_TWILIO")
 AUTH_TOKEN  = os.getenv("AUTH_TOKEN_TWILIO")
 VERIFY_SID  = os.getenv("VERIFY_SID") 
+
+PIX_KEY = os.getenv("PIX_KEY", "nossopointdrinks@gmail.com")  # sua chave Pix (email/cpf/cnpj/phone/aleatória)
+MERCHANT_NAME = os.getenv("PIX_MERCHANT_NAME", "NOSSOPOINT")   # até 25 chars
+MERCHANT_CITY = os.getenv("PIX_MERCHANT_CITY", "SAO PAULO")    # até 15 chars, sem acento
+TXID_PREFIX = os.getenv("PIX_TXID_PREFIX", "WEB")
 
 client = Client(ACCOUNT_SID, AUTH_TOKEN)
 
@@ -60,22 +68,45 @@ CORS(
 )
 
 
+
+def decode_number_jwt(token: str) -> int:
+    decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    # decoded é dict; o sub tem o número
+    print(decoded['sub'])
+    return int(decoded["sub"])
+
+@app.route("/validate_table_number_on_qr", methods=['POST'])
+def validate_table_number_on_qr():
+    print('validate')
+    data = request.get_json()
+    print('data',data)
+    numero = data.get('numero')
+    print('numero',numero)
+    if not numero:
+        return jsonify({'valid': False}), 200
+    tableNumber = decode_number_jwt(numero)
+    print('tablenumver',tableNumber)
+    if 1 <= tableNumber <= 80:
+        return jsonify({'valid': True,'tableNumber':tableNumber}), 200
+
+
+
 @app.route("/auth/sms/create", methods=["POST"])
 def send_verification():
     print('creatingsms')
     phone = request.json.get("phone")
-    v = client.verify.v2.services(VERIFY_SID).verifications.create(to=phone, channel="sms")
-    print(v)
-    return jsonify({"status": v.status}), 200
+    #v = client.verify.v2.services(VERIFY_SID).verifications.create(to=phone, channel="sms")
+    #print(v)
+    return jsonify({"status": 'pending'}), 200
 
 @app.route("/auth/sms/check", methods=["POST"])
 def check_verification():
     print('verification')
-    phone = request.json.get("phone")
-    code = request.json.get("code")
-    chk = client.verify.v2.services(VERIFY_SID).verification_checks.create(to=phone, code=code)
-    print(chk)
-    return jsonify({"status": chk.status})  # 'approved' se ok
+    #phone = request.json.get("phone")
+    #code = request.json.get("code")
+    #chk = client.verify.v2.services(VERIFY_SID).verification_checks.create(to=phone, code=code)
+    #print(chk)
+    return jsonify({"status": 'approved'}), 200  # 'approved' se ok
 
 @app.route('/pegar_pagamentos_comanda', methods=['POST'])
 def pegar_pagamentos_comanda():
@@ -136,37 +167,70 @@ def home():
 from datetime import datetime, timedelta
 from flask import request, jsonify
 
+@app.route('/validate_token_on_qr', methods=['POST'])
+def validate_token_on_qr():
+    print('entrou validate token')
+    print('validate token')
+    data = request.get_json()
+    print('data',data)
+    token = data.get('token')
+    print('token',token)
+    exist = db.execute('SELECT dataUpdateToken FROM clientes WHERE token = ?', token)
+    if exist:
+        data_update = exist[0]['dataUpdateToken']
+        if isinstance(data_update, str):
+            try:
+                # tenta converter do formato padrão ISO (YYYY-MM-DD)
+                data_update_date = datetime.strptime(data_update, "%Y-%m-%d").date()
+            except ValueError:
+                # se vier num formato inesperado, tenta com hora
+                data_update_date = datetime.fromisoformat(data_update).date()
+        else:
+            data_update_date = data_update
+        print('data_update',data_update_date)
+        if data_update_date < datetime.now(brazil).date() + timedelta(days=5):
+            print('valid token')
+            return jsonify({'valid': True}), 200
+    print('invalid token or expired')
+    return jsonify({'valid': False}), 200
+
 @app.route('/guardar_login', methods=['POST'])
 def guardar_login():
+    
     print('entrou guardar login')
     data = request.get_json(silent=True) or {}
-    number = data.get('numero')
+    number = str(data.get('numero'))
+    print('number',number)
 
     if not number:
         return jsonify({"error": "Campo 'number' é obrigatório."}), 400
 
     # Busca 1 usuário; evite depender de != 'bloqueado' no WHERE para mensagens claras
-    rows = db.execute(
-        'SELECT numero, nome, status FROM clientes WHERE numero = ? LIMIT 1',
-        number
-    )
-
+    
+    payload = {
+    "sub": f"{number}",      # identificador do usuário (pode ser id, CPF, etc.)
+    "name": f"nome:{number}",  # nome do usuário
+    "iat": int(datetime.now(brazil).timestamp()),
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    print('token',token)
+    rows = db.execute('SELECT numero, nome, status FROM clientes WHERE numero = ? LIMIT 1', number)
+    print('rows')
     if not rows:
-        db.execute('INSERT INTO clientes (numero,nome,status) VALUES (?,?,?)',number,f'nome:{number}','aprovado')
+        db.execute('INSERT INTO clientes (numero,nome,status,token,dataUpdateToken) VALUES (?,?,?,?,?)',number,f'nome:{number}','aprovado',token,datetime.now().date())
         rows = [{'numero':number,'nome':f'nome:{number}','status':'aprovado'}]
+        print('novo usuario inserido')
+    
+    else:
+        db.execute('UPDATE clientes SET token = ?, dataUpdateToken = ? WHERE numero = ?',token,datetime.now().date(),number)
 
     user = rows[0]
     if user.get('status') == 'bloqueado':
+        print('usuario bloqueado')
         return jsonify({"error": "Usuário bloqueado."}), 403
 
-    payload = {
-        "sub": str(user["numero"]),             # subject do token (id/numero)
-        "name": user["nome"],
-    }
-
-    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-    # PyJWT v2 já retorna str; se for bytes em versões antigas: token = token.decode()
-
+    
+    
     return jsonify({"authToken": token}), 200
 
 
@@ -423,7 +487,10 @@ def handle_connect():
 @socketio.on('getCardapio')
 def getCardapio(emitirBroadcast):
     dataCardapio = db.execute("SELECT * FROM cardapio ORDER BY item ASC")
-    emit('respostaCardapio',{'dataCardapio':dataCardapio},broadcast=emitirBroadcast)
+    if emitirBroadcast:
+        socketio.emit('respostaCardapio',{'dataCardapio':dataCardapio})
+    else:
+        emit('respostaCardapio',{'dataCardapio':dataCardapio},broadcast=emitirBroadcast)
 
 @socketio.on('getPedidos')
 def getPedidos(emitirBroadcast):
@@ -597,6 +664,68 @@ def edit_cargo(data):
 
 import json
 
+def somar_extra_por_unidade(selection):
+    """
+    Soma 'valor_extra' das opções selecionadas na estrutura recebida.
+    Aceita:
+      - [ {nome, options:[{nome, valor_extra, ...}, ...]}, ... ]
+      - { nome, options:[...] }
+      - [ {nome, valor_extra}, ... ]  (lista de opções avulsas)
+    Ignora options com 'selecionado': False
+    """
+    def _sum_from_groups(groups):
+        total = 0.0
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            opts = g.get('options') or g.get('opcoes') or []
+            if not isinstance(opts, list):
+                continue
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                if opt.get('selecionado') is False:
+                    continue
+                try:
+                    total += float(opt.get('valor_extra') or 0)
+                except Exception:
+                    pass
+        return total
+
+    if not selection:
+        return 0.0
+
+    # caso seja dict de 1 grupo
+    if isinstance(selection, dict):
+        # se já parecer "grupo", trata como lista de grupos com 1 elemento
+        if isinstance(selection.get('options') or selection.get('opcoes'), list):
+            return _sum_from_groups([selection])
+        # se for um dict genérico: tente encontrar 'groups/opcoes/options'
+        groups = selection.get('groups') or selection.get('opcoes') or selection.get('options') or []
+        if isinstance(groups, dict):
+            groups = [groups]
+        if isinstance(groups, list):
+            # se cair aqui como lista de opções avulsas, embrulha
+            if groups and isinstance(groups[0], dict) and 'valor_extra' in groups[0] and 'options' not in groups[0]:
+                groups = [{'nome': 'Opções', 'options': groups}]
+            return _sum_from_groups(groups)
+        return 0.0
+
+    # caso seja list
+    if isinstance(selection, list):
+        if not selection:
+            return 0.0
+        # se é lista de grupos? (primeiro tem 'options')
+        first = selection[0]
+        if isinstance(first, dict) and ('options' in first or 'opcoes' in first):
+            return _sum_from_groups(selection)
+        # se é lista de opções avulsas
+        if isinstance(first, dict) and 'valor_extra' in first and 'options' not in first:
+            return _sum_from_groups([{'nome': 'Opções', 'options': selection}])
+        return 0.0
+
+    return 0.0
+
 @socketio.on('insert_order')
 def handle_insert_order(data):
     try:
@@ -628,63 +757,86 @@ def handle_insert_order(data):
         def selecionar_opcoes_por_indice(idx):
             """
             Retorna a seleção de opções referente ao item 'idx'.
-            Aceita formatos:
-              - lista alinhada ao array de pedidos: [sel0, sel1, ...]
-              - único dict/list para todos os pedidos
+            Formatos aceitos no payload:
+            A) lista alinhada por item: [ [grupos...], [grupos...] ]
+            B) lista de grupos (apenas 1 item): [ {nome, options:[...]} , ... ]
+            C) dict único: { ... }
             """
-            if isinstance(opcoesSelecionadas, list):
-                return opcoesSelecionadas[idx] if idx < len(opcoesSelecionadas) else []
-            elif isinstance(opcoesSelecionadas, dict):
-                return opcoesSelecionadas
+            sel = opcoesSelecionadas
+            if isinstance(sel, list):
+                # A) lista alinhada por item?
+                if idx < len(sel) and (isinstance(sel[idx], list) or isinstance(sel[idx], dict)):
+                    return sel[idx]
+                # B) se só tem 1 item, pode ser a lista de grupos inteira
+                if len(pedidos) == 1:
+                    return sel
+                return []
+            elif isinstance(sel, dict):
+                return sel
             else:
                 return []
 
         def somar_extra_por_unidade(selection):
             """
-            Soma os 'valor_extra' das opções selecionadas em uma seleção.
-            Formatos aceitos:
-              selection = [
-                {'nome': 'Frutas', 'ids': '', 'options': [{'nome':'manga','valor_extra':2}, ...]},
-                ...
-              ]
-              ou um dict equivalente.
-            Se existir a chave 'selecionado' em uma option e for False, ignora.
+            Soma 'valor_extra' das opções selecionadas na estrutura recebida.
+            Aceita:
+            - [ {nome, options:[{nome, valor_extra, ...}, ...]}, ... ]
+            - { nome, options:[...] }
+            - [ {nome, valor_extra}, ... ]  (lista de opções avulsas)
+            Ignora options com 'selecionado': False
             """
-            total = 0.0
+            def _sum_from_groups(groups):
+                total = 0.0
+                for g in groups:
+                    if not isinstance(g, dict):
+                        continue
+                    opts = g.get('options') or g.get('opcoes') or []
+                    if not isinstance(opts, list):
+                        continue
+                    for opt in opts:
+                        if not isinstance(opt, dict):
+                            continue
+                        if opt.get('selecionado') is False:
+                            continue
+                        try:
+                            total += float(opt.get('valor_extra') or 0)
+                        except Exception:
+                            pass
+                return total
+
             if not selection:
                 return 0.0
 
-            # Normaliza para uma lista de grupos
+            # caso seja dict de 1 grupo
             if isinstance(selection, dict):
+                # se já parecer "grupo", trata como lista de grupos com 1 elemento
+                if isinstance(selection.get('options') or selection.get('opcoes'), list):
+                    return _sum_from_groups([selection])
+                # se for um dict genérico: tente encontrar 'groups/opcoes/options'
                 groups = selection.get('groups') or selection.get('opcoes') or selection.get('options') or []
                 if isinstance(groups, dict):
                     groups = [groups]
-                if not isinstance(groups, list):
-                    groups = []
-            elif isinstance(selection, list):
-                groups = selection
-            else:
-                groups = []
+                if isinstance(groups, list):
+                    # se cair aqui como lista de opções avulsas, embrulha
+                    if groups and isinstance(groups[0], dict) and 'valor_extra' in groups[0] and 'options' not in groups[0]:
+                        groups = [{'nome': 'Opções', 'options': groups}]
+                    return _sum_from_groups(groups)
+                return 0.0
 
-            for g in groups:
-                opts = None
-                if isinstance(g, dict):
-                    # tenta chaves comuns
-                    opts = g.get('options') or g.get('opcoes') or []
-                if not isinstance(opts, list):
-                    continue
+            # caso seja list
+            if isinstance(selection, list):
+                if not selection:
+                    return 0.0
+                # se é lista de grupos? (primeiro tem 'options')
+                first = selection[0]
+                if isinstance(first, dict) and ('options' in first or 'opcoes' in first):
+                    return _sum_from_groups(selection)
+                # se é lista de opções avulsas
+                if isinstance(first, dict) and 'valor_extra' in first and 'options' not in first:
+                    return _sum_from_groups([{'nome': 'Opções', 'options': selection}])
+                return 0.0
 
-                for opt in opts:
-                    if not isinstance(opt, dict):
-                        continue
-                    if opt.get('selecionado') is False:
-                        continue
-                    val = opt.get('valor_extra', 0) or 0
-                    try:
-                        total += float(val)
-                    except Exception:
-                        pass
-            return total
+            return 0.0
 
         # logs úteis
         print(username)
@@ -732,43 +884,49 @@ def handle_insert_order(data):
             opcoes_json = json.dumps(selecao_opcoes or [], ensure_ascii=False)
 
             # notificação por categoria (mantido)
+            horario_entrega = None
             if categoria == 3:
+                horario_entrega = (datetime.now(brazil) + timedelta(minutes=40)).strftime('%H:%M')
+
                 enviar_notificacao_expo('Cozinha', 'Novo Pedido',
                                         f'{quantidade} {pedido} {extra_txt} na {comanda}', token_user)
             elif categoria == 2:
+                horario_entrega = (datetime.now(brazil) + timedelta(minutes=15)).strftime('%H:%M')
                 enviar_notificacao_expo('Colaborador', 'Novo Pedido',
                                         f'{quantidade} {pedido} {extra_txt} na {comanda}', token_user)
+            
+                
 
             # === CÁLCULO DE PREÇO COM NOVAS OPÇÕES ===
             # preco_unitario_final = preco_base + extra_por_unidade
             # preco_total = preco_unitario_final * quantidade
             preco_unitario_final = preco_base + float(extra_por_unidade or 0)
             preco_total = preco_unitario_final * quantidade
-
+            remetente = 'Carrinho:NossoPoint'
             if preco:  # brinde: força preco 0 (mantém comportamento antigo)
                 db.execute(
-                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, categoria, inicio, estado, extra, opcoes, username, ordem, nome, dia) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, categoria, inicio, estado, extra, opcoes, username, ordem, nome, remetente, dia,horario_para_entrega) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)',
                     comanda, pedido, quantidade, 0, categoria, horario, 'A Fazer',
-                    extra_txt, opcoes_json, username, 0, nome_cliente, dia
+                    extra_txt, opcoes_json, username, 0, nome_cliente, remetente, dia, horario_entrega
                 )
 
             elif not preco_unitario_row:  # item fora do cardápio (sem preço conhecido)
                 db.execute(
-                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, categoria, inicio, estado, extra, opcoes, username, ordem, nome, dia) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, categoria, inicio, estado, extra, opcoes, username, ordem, nome,remetente, dia, horario_para_entrega) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?)',
                     comanda, pedido, quantidade, 0, categoria, horario, 'A Fazer',
-                    extra_txt, opcoes_json, username, 0, nome_cliente, dia
+                    extra_txt, opcoes_json, username, 0, nome_cliente,remetente ,dia, horario_entrega
                 )
 
             else:
                 # sempre que conhecemos o preço base, gravamos também preco_unitario
                 db.execute(
-                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, preco_unitario, categoria, inicio, estado, extra, opcoes, username, ordem, nome, dia) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'INSERT INTO pedidos(comanda, pedido, quantidade, preco, preco_unitario, categoria, inicio, estado, extra, opcoes, username, ordem, nome,remetente, dia, horario_para_entrega) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? , ?, ?)',
                     comanda, pedido, quantidade,
                     preco_total, preco_unitario_final, categoria, horario, 'A Fazer',
-                    extra_txt, opcoes_json, username, 0, nome_cliente, dia
+                    extra_txt, opcoes_json, username, 0, nome_cliente, remetente,dia, horario_entrega
                 )
 
             # mantém o restante da lógica (emissão, estoque, etc.)
@@ -795,6 +953,8 @@ def handle_insert_order(data):
                 getEstoque(True)
 
         faturamento(True)
+        getPedidos(True)
+        getComandas(True)
         handle_get_cardapio(comanda)
 
     except Exception as e:
@@ -1286,7 +1446,7 @@ def handle_get_cardapio(data):
             
 
                 dados = db.execute('''
-                    SELECT pedido,id,ordem,nome,extra, SUM(quantidade) AS quantidade, SUM(quantidade_paga) as quantidade_paga, SUM(preco) AS preco
+                    SELECT pedido,id,ordem,nome,extra,opcoes, SUM(quantidade) AS quantidade, SUM(quantidade_paga) as quantidade_paga, SUM(preco) AS preco
                     FROM pedidos WHERE comanda =? AND ordem = ? AND dia = ? GROUP BY pedido, preco_unitario
                 ''', fcomanda, ordem,dia)
                 nomes = db.execute(
@@ -1303,13 +1463,11 @@ def handle_get_cardapio(data):
         else:
             print('segundo else')
             dados = db.execute('''
-                    SELECT pedido,id,ordem,nome,extra, SUM(quantidade) AS quantidade, SUM(quantidade_paga) as quantidade_paga, SUM(preco) AS preco
+                    SELECT pedido,id,ordem,nome,extra,opcoes, SUM(quantidade) AS quantidade, SUM(quantidade_paga) as quantidade_paga, SUM(preco) AS preco
                     FROM pedidos WHERE comanda =? AND ordem = ? AND dia = ? GROUP BY pedido, preco_unitario
                 ''', fcomanda, ordem,dia)
             socketio.emit('preco', {'preco_a_pagar': '', 'preco_total': '', 'preco_pago': '', 'dados': dados, 'nomes': '',
                            'comanda': fcomanda})
-        getPedidos(True)
-        getComandas(True)
 
 
     except Exception as e:
@@ -1349,17 +1507,101 @@ def cadastro(data):
           )
     users(True)
 
+def _bool_int(v):
+    if isinstance(v, bool):
+        return 1 if v else 0
+    if isinstance(v, (int, float)):
+        return 1 if int(v) != 0 else 0
+    s = str(v).strip().lower()
+    return 1 if s in ("1", "true", "t", "yes", "y", "sim") else 0
+
+def _slugify(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
+    return s or "n-a"
+
+def _parse_opcoes(obj):
+    """Aceita string JSON ou lista já estruturada; retorna lista saneara no formato:
+       [{nome, ids, max_selected:int, obrigatorio:0/1, options:[{nome, valor_extra:float, esgotado:0/1}]}]
+    """
+    if obj is None:
+        return []
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except Exception:
+            return []
+
+    out = []
+    if isinstance(obj, list):
+        for g in obj:
+            try:
+                nome = (g.get("nome") or g.get("titulo") or "").strip()
+                if not nome:
+                    continue
+                ids = str(g.get("ids") or "")
+                max_selected = int(g.get("max_selected") or 1)
+                if max_selected < 1:
+                    max_selected = 1
+                obrigatorio = _bool_int(g.get("obrigatorio"))
+
+                opts_in = g.get("options") or []
+                opts_out = []
+                for o in opts_in:
+                    onome = str(o.get("nome") or "").strip()
+                    if not onome:
+                        continue
+                    extra = float(o.get("valor_extra") or 0.0)
+                    esgotado = _bool_int(o.get("esgotado"))
+                    opts_out.append({
+                        "nome": onome,
+                        "valor_extra": extra,
+                        "esgotado": esgotado,
+                    })
+                if opts_out:
+                    out.append({
+                        "nome": nome,
+                        "ids": ids,
+                        "max_selected": max_selected,
+                        "obrigatorio": obrigatorio,
+                        "options": opts_out,
+                    })
+            except Exception:
+                # ignora grupo problemático
+                pass
+    return out
+
+def _sync_opcoes_rows(id_cardapio: int, item_nome: str, grupos: list):
+    """Limpa e re-insere as linhas em `opcoes` para este cardápio."""
+    db.execute("DELETE FROM opcoes WHERE id_cardapio = ?", id_cardapio)
+    now = datetime.now().isoformat(timespec="seconds")
+    for g in grupos:
+        gname = g["nome"]
+        gslug = _slugify(g.get("grupo_slug") or gname)
+        for o in g.get("options", []):
+            oname = o["nome"]
+            oslug = _slugify(o.get("opcao_slug") or oname)
+            extra = float(o.get("valor_extra") or 0.0)
+            esgotado = _bool_int(o.get("esgotado"))
+            db.execute(
+                """
+                INSERT INTO opcoes
+                  (id_cardapio, item, nome_grupo, opcao, valor_extra, esgotado_bool, grupo_slug, opcao_slug, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                id_cardapio, item_nome, gname, oname, extra, esgotado, gslug, oslug, now
+            )
+
 
 @socketio.on('adicionarCardapio')
 def adicionarCardapio(data):
-    print(data.get('opcoes'))
-    item = data.get('item')
+    item = (data.get('item') or '').strip()
     preco = data.get('preco')
     categoria = data.get('categoria')
     usuario = data.get('username')
     token_user = data.get('token')
 
-    if not item or not preco or not categoria:
+    if not item or preco is None or not categoria:
         emit('Erro', {'erro': 'Alguma categoria faltando'})
         return
 
@@ -1370,34 +1612,22 @@ def adicionarCardapio(data):
     else:
         categoria_id = 1
 
-    alteracoes = f'item: {item} preco: {preco} categoria: {categoria}'
+    # opcoes saneadas
+    grupos = _parse_opcoes(data.get('opcoes'))
+    opcoes_json = json.dumps(grupos, ensure_ascii=False)
 
-    # Opções estruturadas (lista de grupos)
-    opcoes = data.get('opcoes') or []
-    # filtra opções sem nome e grupos vazios
-    opcoes = [
-        {
-            **g,
-            "options": [o for o in (g.get("options") or []) if (o.get("nome") or "").strip()]
-        }
-        for g in opcoes
-    ]
-    opcoes = [g for g in opcoes if g["options"]]
-
-    # garante tipos corretos
-    if isinstance(opcoes, str):
-        try:
-            opcoes = json.loads(opcoes)
-        except Exception:
-            opcoes = []
-
-    opcoes_json = json.dumps(opcoes, ensure_ascii=False)
-
+    # INSERT cardapio + pegar id
     db.execute(
-        'INSERT INTO cardapio (item,categoria_id,preco,opcoes) VALUES (?,?,?,?)',
+        'INSERT INTO cardapio (item, categoria_id, preco, opcoes) VALUES (?,?,?,?)',
         item, categoria_id, float(preco), opcoes_json
     )
-    alteracoes += ' (com opcoes)'
+    # SQLite: id da última inserção na mesma conexão
+    new_id = db.execute("SELECT last_insert_rowid() AS id")[0]["id"]
+
+    # sincroniza linhas da tabela `opcoes`
+    _sync_opcoes_rows(new_id, item, grupos)
+
+    alteracoes = f'item: {item} preco: {preco} categoria: {categoria} (com opcoes)'
     insertAlteracoesTable('Cardapio', alteracoes, 'Adicionou', 'Tela Cardapio', usuario)
     enviar_notificacao_expo('ADM', 'Item Adicionado Cardapio', f"{usuario} Adicionou {alteracoes}", token_user)
     getCardapio(True)
@@ -1406,27 +1636,19 @@ def adicionarCardapio(data):
 
 
 
+
 @socketio.on('editarCardapio')
 def editarCardapio(data):
-    item = data.get('item')
+    item = (data.get('item') or '').strip()
     preco = data.get('preco')
     categoria = data.get('categoria')
-    novoNome = data.get('novoNome')
-    opcoes = data.get('opcoes')
-    # filtra opções sem nome e grupos vazios
-    opcoes = [
-        {
-            **g,
-            "options": [o for o in (g.get("options") or []) if (o.get("nome") or "").strip()]
-        }
-        for g in opcoes
-    ]
-    opcoes = [g for g in opcoes if g["options"]]
+    novoNome = (data.get('novoNome') or '').strip()
+    raw_opcoes = data.get('opcoes')
 
     usuario = data.get('username')
     token_user = data.get('token')
 
-    if not (item and preco and categoria):
+    if not (item and preco is not None and categoria):
         emit('Erro', {'erro': 'Dados insuficientes'})
         return
 
@@ -1439,42 +1661,55 @@ def editarCardapio(data):
     else:
         categoria_id = 1
 
-    alteracoes = f'{item}, '
+    # pega antigo para log
     dadoAntigo = db.execute('SELECT * FROM cardapio WHERE item = ?', item)
     dadoAntigo = dadoAntigo[0] if dadoAntigo else {}
 
-    # Normaliza opcoes -> JSON string (ou None)
+    # se vier opcoes, saneia e serializa; senão mantém (não mexe no JSON nem na tabela opcoes)
+    grupos = None
     opcoes_json = None
-    if opcoes is not None:
-        if isinstance(opcoes, str):
-            # se vier string, tenta usar direto (se for JSON válido)
-            try:
-                parsed = json.loads(opcoes)
-                opcoes_json = json.dumps(parsed, ensure_ascii=False)
-            except Exception:
-                # se não for JSON válido, zera
-                opcoes_json = json.dumps([], ensure_ascii=False)
-        else:
-            opcoes_json = json.dumps(opcoes or [], ensure_ascii=False)
+    if raw_opcoes is not None:
+        grupos = _parse_opcoes(raw_opcoes)
+        opcoes_json = json.dumps(grupos, ensure_ascii=False)
 
-    # Monta UPDATE conforme campos
+    # UPDATE principal
     if opcoes_json is not None and novoNome:
-        db.execute("UPDATE cardapio SET item = ?, preco = ?, categoria_id = ?, opcoes = ? WHERE item = ?",
-                   novoNome, float(preco), categoria_id, opcoes_json, item)
+        db.execute(
+            "UPDATE cardapio SET item = ?, preco = ?, categoria_id = ?, opcoes = ? WHERE item = ?",
+            novoNome, float(preco), categoria_id, opcoes_json, item
+        )
     elif opcoes_json is not None:
-        db.execute("UPDATE cardapio SET preco = ?, categoria_id = ?, opcoes = ? WHERE item = ?",
-                   float(preco), categoria_id, opcoes_json, item)
+        db.execute(
+            "UPDATE cardapio SET preco = ?, categoria_id = ?, opcoes = ? WHERE item = ?",
+            float(preco), categoria_id, opcoes_json, item
+        )
     elif novoNome:
-        db.execute("UPDATE cardapio SET item = ?, preco = ?, categoria_id = ? WHERE item = ?",
-                   novoNome, float(preco), categoria_id, item)
+        db.execute(
+            "UPDATE cardapio SET item = ?, preco = ?, categoria_id = ? WHERE item = ?",
+            novoNome, float(preco), categoria_id, item
+        )
     else:
-        db.execute("UPDATE cardapio SET preco = ?, categoria_id = ? WHERE item = ?",
-                   float(preco), categoria_id, item)
+        db.execute(
+            "UPDATE cardapio SET preco = ?, categoria_id = ? WHERE item = ?",
+            float(preco), categoria_id, item
+        )
 
+    # chave atual para buscar id
     chaveBusca = novoNome if novoNome else item
-    dadoAtualizado = db.execute('SELECT * FROM cardapio WHERE item = ?', chaveBusca)
+    dadoAtualizado = db.execute('SELECT * FROM cardapio WHERE item = ? ORDER BY id DESC LIMIT 1', chaveBusca)
     dadoAtualizado = dadoAtualizado[0] if dadoAtualizado else {}
 
+    # sincroniza tabela `opcoes`
+    if dadoAtualizado:
+        id_cardapio = dadoAtualizado.get("id")
+        if grupos is not None:
+            _sync_opcoes_rows(id_cardapio, chaveBusca, grupos)
+        elif novoNome:
+            # só renomeou item — reflita em `opcoes.item`
+            db.execute("UPDATE opcoes SET item = ? WHERE id_cardapio = ?", chaveBusca, id_cardapio)
+
+    # log diffs
+    alteracoes = f'{item}, '
     dif = {k for k in (dadoAtualizado.keys() & dadoAntigo.keys())
            if dadoAtualizado[k] != dadoAntigo.get(k)}
     for key in dif:
@@ -1483,6 +1718,7 @@ def editarCardapio(data):
     insertAlteracoesTable('Cardapio', alteracoes, 'Editou', 'Tela Cardapio', usuario)
     enviar_notificacao_expo('ADM', 'Cardapio editado', f"{usuario} Editou {alteracoes}", token_user)
     getCardapio(True)
+
 
   
 
@@ -1748,7 +1984,7 @@ def buscar_menu_data(emitir_broadcast):
 
         data_geral = db.execute(
             '''
-            SELECT id, item, preco, categoria_id, image, opcoes, subcategoria
+            SELECT id, item, preco,preco_base, categoria_id, image, opcoes, subcategoria
             FROM cardapio
             WHERE usable_on_qr = ?
             ORDER BY item ASC
@@ -1772,30 +2008,37 @@ def buscar_menu_data(emitir_broadcast):
                 categoria_item = 'comida'
             else:
                 categoria_item = 'outros'
+            
+            raw = row.get('opcoes')
 
-            # --- Coalesce seguro para options_on_qr ---
-            opcoes_str = row.get('opcoes')
-            if opcoes_str is None:
-                opcoes_str = ''
-            elif not isinstance(opcoes_str, str):
-                opcoes_str = str(opcoes_str)
+            if not raw:
+                options = []
+            elif isinstance(raw, (list, dict)):
+                # já é Python list/dict — ótimo
+                options = raw
+            else:
+                try:
+                    options = json.loads(raw)  # string JSON válida (aspas duplas)
+                except Exception:
+                    try:
+                        # fallback se veio com aspas simples
+                        options = json.loads(raw.replace("'", '"'))
+                    except Exception as e:
+                        print(f'Erro ao carregar opções para item {item_nome}:', e)
+                        options = []
 
-            # pega "Titulo(conteudo)" sem ser guloso além do próximo ')'
-            matches = re.findall(r'([A-Za-zÀ-ÿ\' ]+)\(([^)]*)\)', opcoes_str)
-
-            options = {}
-            for opt_key, conteudo in matches:
-                itens = [i.strip() for i in conteudo.split('-') if i.strip()]
-                options[opt_key.strip()] = itens
-
+        
+            
             data_geral_atualizado.append({
                 'id': row['id'],
                 'name': item_nome,
                 'price': row.get('preco'),
+                'original_price': row.get('preco_base'),
                 'categoria': categoria_item,
                 'subCategoria': row.get('subcategoria','outros'),
                 'image': row.get('image') or None,
-                'options': options
+                'options': options,
+
             })
 
         emit('menuData', data_geral_atualizado, broadcast=emitir_broadcast)
@@ -1804,23 +2047,30 @@ def buscar_menu_data(emitir_broadcast):
         print('erro ao buscar_menu_data:', e)
 
 @socketio.on('enviar_pedido_on_qr')
-def enviar_pedido_on_qr(data,comanda):
+def enviar_pedido_on_qr(data,comanda,token):
     print(f'enviar pedido on qr:\n {data}')
     print(f'comanda {comanda}')
+    cliente = db.execute('SELECT numero FROM clientes WHERE token = ?',token)
+    user_number = cliente[0].get('numero') if cliente else None
+    if not user_number:
+        user_number = 'Desconhecido'
     dia = datetime.now(brazil).date()
     for row in data:
         subcategoria = row.get('subcategoria')
-        pedido_dict = db.execute('SELECT item FROM cardapio WHERE id = ?',row.get('id'))
+        pedido_dict = db.execute('SELECT item,preco FROM cardapio WHERE id = ?',row.get('id'))
         if pedido_dict:
             pedido = pedido_dict[0].get('item')
+            preco_unitario = float(pedido_dict[0].get('preco'))
         preco = float(row.get('price'))
         categoria = row.get('categoria')
         quantidade = row.get('quantity')
-        options = row.get('selectedOptions')
-        obs = row.get('observations')
+        options = row.get('selectedOptions',[])
+        if not options:
+            options = []
+        obs = row.get('observations', None)
         extra = ''
         if categoria=='comida':
-            if pedido not in ['amendoim', 'milho']:
+            if pedido not in ['amendoim', 'milho','castanha de caju']:
                 categoria_id = 1
             elif pedido.startswith('acai'):
                 categoria_id = 2
@@ -1834,44 +2084,10 @@ def enviar_pedido_on_qr(data,comanda):
 
         agr = datetime.now()
         hora_min = agr.strftime("%H:%M")
-        extra = None
-        if options:
-            extra = auxiliar_dicionario_para_string(options)
-            if obs:
-                extra = (extra + ", " + 'Obs: '+ obs).strip(", ")
-        elif obs:
-            extra = obs
-
-        db.execute('''INSERT INTO pedidos (comanda,pedido,quantidade,extra,preco,categoria,inicio,estado,nome,ordem,dia)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)''',comanda,pedido,quantidade,extra, preco,categoria_id,hora_min,'A Fazer','-1',0,dia)
+        db.execute('''INSERT INTO pedidos (comanda,pedido,quantidade,extra,preco,preco_unitario,categoria,inicio,estado,nome,ordem,dia,username,opcoes,remetente)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',comanda,pedido,quantidade,obs, preco,preco_unitario,categoria_id,hora_min,'A Fazer','-1',0,dia,f'Cliente:{user_number}',json.dumps(options),'Carrinho:NossoPoint')
 
 
-def auxiliar_dicionario_para_string(options):
-    try:
-        limpo = {}
-        for k, v in options.items():
-            if isinstance(v, str):
-                val = re.sub(r'\+\d+(?:[.,]\d+)?$', '', v).replace('+', ' ').strip()
-                limpo[k] = val
-            elif isinstance(v, list):
-                limpo[k] = [re.sub(r'\+\d+(?:[.,]\d+)?$', '', item).replace('+', ' ').strip() for item in v]
-            else:
-                limpo[k] = v
-
-        parts = []
-        for k, v in limpo.items():
-            if isinstance(v, list):
-                for item in v:
-                    if item:
-                        parts.append(f"{k}: {item}")
-            else:
-                if v:
-                    parts.append(f"{k}: {v}")
-
-        extra = ", ".join(parts)
-        return extra
-    except Exception as e:
-        print('erro_auxiliar_dicionario_para_string:', e)
 
 @socketio.on('savePromotion')
 def savePromotion(data):
@@ -2149,6 +2365,755 @@ def extrair_pedido_ifood(order: dict) -> dict:
         "agendamento_hora": agendamento_hora,
     }
 
+def _now_iso():
+    return datetime.utcnow().isoformat(timespec="seconds")
+
+_slug_non_alnum = re.compile(r"[^a-z0-9]+")
+def slugify(s: str) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = s.lower().strip()
+    s = _slug_non_alnum.sub("-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s
+
+def _get_column_names(table: str):
+    try:
+        rows = db.execute(f"SELECT name FROM pragma_table_info('{table}')") or []
+        return { (r.get("name") or "").strip() for r in rows }
+    except Exception:
+        return set()
+
+def ensure_schema():
+    """
+    Garante colunas em `opcoes` e cria auditoria (sem DEFAULT(datetime('now'))).
+    Backfill dos slugs a partir de nome_grupo/opcao.
+    """
+    colnames = _get_column_names("opcoes")
+
+    # Estas três já existem no seu schema, mas mantemos defensivo:
+    if "grupo_slug" not in colnames:
+        db.execute("ALTER TABLE opcoes ADD COLUMN grupo_slug TEXT")
+    if "opcao_slug" not in colnames:
+        db.execute("ALTER TABLE opcoes ADD COLUMN opcao_slug TEXT")
+    if "updated_at" not in colnames:
+        db.execute("ALTER TABLE opcoes ADD COLUMN updated_at TEXT")
+
+    # Auditoria
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS opcoes_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT DEFAULT (datetime('now')),
+            actor TEXT,
+            where_json TEXT,
+            set_json TEXT,
+            dry_run INTEGER,
+            matched INTEGER,
+            updated INTEGER,
+            items_json TEXT
+        )
+    """)
+
+    # Backfill de slugs (a partir de nome_grupo/opcao)
+    rows = db.execute("""
+        SELECT rowid, nome_grupo, opcao, grupo_slug, opcao_slug
+        FROM opcoes
+    """) or []
+    to_update = []
+    for r in rows:
+        gslug = (r.get("grupo_slug") or "").strip()
+        oslug = (r.get("opcao_slug") or "").strip()
+        if not gslug or not oslug:
+            ng = (r.get("nome_grupo") or "").strip()
+            op = (r.get("opcao") or "").strip()
+            to_update.append({
+                "rowid": r["rowid"],
+                "g": slugify(ng),
+                "o": slugify(op),
+            })
+
+    if to_update:
+        db.execute("BEGIN")
+        try:
+            ts = _now_iso()
+            for u in to_update:
+                db.execute(
+                    "UPDATE opcoes SET grupo_slug = :g, opcao_slug = :o, updated_at = :ts WHERE rowid = :rowid",
+                    g=u["g"], o=u["o"], ts=ts, rowid=u["rowid"]
+                )
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+
+def _parse_bool(s):
+    if s is None:
+        return False
+    return str(s).strip().lower() in ("1", "true", "yes", "y")
+
+# ---------- /opcoes/aggregate ----------
+@app.route("/opcoes/aggregate", methods=["GET"])
+def opcoes_aggregate():
+    """
+    Params:
+      q (opcional) - pesquisa em nome_grupo/opcao/item
+      grupo_slug (opcional)
+      somente_esgotados (0|1)
+      somente_extra_positivo (0|1)
+      limit (opcional, padrão 100)
+    """
+    ensure_schema()
+
+    q = (request.args.get("q") or "").strip()
+    grupo_slug = (request.args.get("grupo_slug") or "").strip().lower()
+    somente_esgotados = _parse_bool(request.args.get("somente_esgotados"))
+    somente_extra_positivo = _parse_bool(request.args.get("somente_extra_positivo"))
+    try:
+        limit = int(request.args.get("limit") or 100)
+    except Exception:
+        limit = 100
+    limit = max(1, min(limit, 500))
+
+    # Filtros dinâmicos (base)
+    wh = ["1=1"]
+    base_params = {}
+
+    if grupo_slug:
+        wh.append("grupo_slug = :gslug")
+        base_params["gslug"] = grupo_slug
+
+    if somente_esgotados:
+        wh.append("(esgotado_bool = 1)")
+
+    if somente_extra_positivo:
+        wh.append("(COALESCE(valor_extra,0) > 0)")
+
+    if q:
+        wh.append("""
+          (
+            LOWER(COALESCE(nome_grupo,'')) LIKE :q
+            OR LOWER(COALESCE(opcao,'')) LIKE :q
+            OR LOWER(COALESCE(item,'')) LIKE :q
+          )
+        """)
+        base_params["q"] = f"%{q.lower()}%"
+
+    where_sql = " AND ".join(wh)
+
+    # -------- Agregação (usa :lim) --------
+    agg_sql = f"""
+        SELECT
+          MIN(nome_grupo)  AS grupo,
+          grupo_slug       AS grupo_slug,
+          MIN(opcao)       AS opcao,
+          opcao_slug       AS opcao_slug,
+          COUNT(*)         AS ocorrencias,
+          SUM(CASE WHEN esgotado_bool = 1 THEN 1 ELSE 0 END) AS esgotados,
+          ROUND(AVG(COALESCE(valor_extra,0)), 2) AS media_valor_extra
+        FROM opcoes
+        WHERE {where_sql}
+        GROUP BY grupo_slug, opcao_slug
+        ORDER BY MIN(nome_grupo), MIN(opcao)
+        LIMIT :lim
+    """
+    paramsAgg = dict(base_params)
+    paramsAgg["lim"] = limit
+
+    clusters = db.execute(agg_sql, **paramsAgg) or []
+
+    # -------- Amostra de itens (NÃO usa :lim) --------
+    out = []
+    for c in clusters:
+        items_sql = f"""
+            SELECT
+              id_cardapio AS item_id,
+              item        AS item_nome,
+              valor_extra,
+              esgotado_bool
+            FROM opcoes
+            WHERE {where_sql} AND grupo_slug = :gs AND opcao_slug = :os
+            ORDER BY id_cardapio
+            LIMIT 30
+        """
+        paramsItems = dict(base_params)
+        paramsItems["gs"] = c["grupo_slug"]
+        paramsItems["os"] = c["opcao_slug"]
+
+        items = db.execute(items_sql, **paramsItems) or []
+
+        out.append({
+            "grupo": c["grupo"],
+            "grupo_slug": c["grupo_slug"],
+            "opcao": c["opcao"],
+            "opcao_slug": c["opcao_slug"],
+            "ocorrencias": c["ocorrencias"],
+            "esgotados": c["esgotados"] or 0,
+            "media_valor_extra": float(c["media_valor_extra"] or 0),
+            "amostra_itens": [
+                {
+                    "item_id": r["item_id"],
+                    "item_nome": r["item_nome"],
+                    "valor_extra": float(r["valor_extra"] or 0),
+                    "esgotado": int(r["esgotado_bool"] or 0),
+                }
+                for r in items
+            ],
+        })
+
+    return jsonify(out)
+
+# ---------- /opcoes/bulk-update ----------
+@app.route("/opcoes/bulk-update", methods=["POST"])
+def opcoes_bulk_update():
+    """
+    Body:
+    {
+      "where": { "grupo_slug": "...", "opcao_slug": "..." },
+      "restrict_items": [1,2,3],                  // IDs de cardapio (id_cardapio) - opcional
+      "set": { "valor_extra": 22.0, "esgotado": 1 }, // pelo menos um
+      "dry_run": true|false
+    }
+    """
+    ensure_schema()
+
+    data = request.get_json(force=True) or {}
+    where = data.get("where") or {}
+    set_ = data.get("set") or {}
+    restrict_items = data.get("restrict_items") or []
+    dry_run = bool(data.get("dry_run"))
+
+    gslug = (where.get("grupo_slug") or "").strip().lower()
+    oslug = (where.get("opcao_slug") or "").strip().lower()
+    if not gslug or not oslug:
+        return jsonify({"error": "where.grupo_slug e where.opcao_slug são obrigatórios."}), 400
+
+    set_fields = {}
+    if "valor_extra" in set_ and set_["valor_extra"] is not None:
+        try:
+            set_fields["valor_extra"] = float(set_["valor_extra"])
+        except Exception:
+            return jsonify({"error": "set.valor_extra inválido."}), 400
+    if "esgotado" in set_ and set_["esgotado"] is not None:
+        v = set_["esgotado"]
+        if v in (0, 1, "0", "1", True, False, "true", "false", "True", "False"):
+            set_fields["esgotado_bool"] = 1 if str(v).lower() in ("1", "true") else 0
+        else:
+            return jsonify({"error": "set.esgotado deve ser 0/1/true/false."}), 400
+
+    if not set_fields:
+        return jsonify({"error": "Inclua pelo menos um campo em 'set' (valor_extra/esgotado)."}), 400
+
+    # Filtro base
+    wh = ["grupo_slug = :gs", "opcao_slug = :os"]
+    params = {"gs": gslug, "os": oslug}
+
+    # Restrição opcional por itens (id_cardapio)
+    ids = []
+    if restrict_items:
+        ids = [int(x) for x in restrict_items if str(x).isdigit()]
+        if not ids:
+            return jsonify({"error": "restrict_items inválido/vazio."}), 400
+        placeholders = ",".join([f":id{i}" for i in range(len(ids))])
+        wh.append(f"id_cardapio IN ({placeholders})")
+        for i, v in enumerate(ids):
+            params[f"id{i}"] = v
+
+    where_sql = " AND ".join(wh)
+
+    # Impacto
+    rows = db.execute(
+        f"SELECT id_cardapio FROM opcoes WHERE {where_sql}",
+        **params
+    ) or []
+    matched = len(rows)
+    items = sorted(list({r["id_cardapio"] for r in rows}))
+    if dry_run:
+        return jsonify({
+            "matched": matched,
+            "would_update": matched,
+            "items": items,
+            "dry_run": True
+        })
+
+    # UPDATE em transação
+    set_clauses = []
+    set_params = {}
+    if "valor_extra" in set_fields:
+        set_clauses.append("valor_extra = :nv")
+        set_params["nv"] = float(set_fields["valor_extra"])
+    if "esgotado_bool" in set_fields:
+        set_clauses.append("esgotado_bool = :ne")
+        set_params["ne"] = int(set_fields["esgotado_bool"])
+    set_clauses.append("updated_at = :ts")
+    set_params["ts"] = _now_iso()
+
+    db.execute("BEGIN")
+    try:
+        sql = f"UPDATE opcoes SET {', '.join(set_clauses)} WHERE {where_sql}"
+        db.execute(sql, **set_params, **params)
+        updated = matched  # cs50/SQLite não dá rowcount confiável
+
+        actor = request.headers.get("X-User") or "api"
+        audit_id = db.execute(
+            """
+            INSERT INTO opcoes_audit (actor, where_json, set_json, dry_run, matched, updated, items_json)
+            VALUES (:actor, :w, :s, 0, :m, :u, :items)
+            """,
+            actor=actor,
+            w=json.dumps({"grupo_slug": gslug, "opcao_slug": oslug}, ensure_ascii=False),
+            s=json.dumps(set_fields, ensure_ascii=False),
+            m=matched,
+            u=updated,
+            items=json.dumps(items)
+        )
+        getCardapio(True)  # broadcast atualização do cardápio
+        if not audit_id:
+            rid = db.execute("SELECT last_insert_rowid() AS id")[0]["id"]
+            audit_id = rid
+
+        db.execute("COMMIT")
+    except Exception as e:
+        db.execute("ROLLBACK")
+        return jsonify({"error": f"Falha ao aplicar: {e}"}), 500
+
+    return jsonify({
+        "matched": matched,
+        "updated": updated,
+        "items": items,
+        "audit_id": audit_id,
+        "dry_run": False
+    })
+
+# ---------- Reconstrução do JSON cardapio.opcoes ----------
+def _read_cardapio_props_map(item_id: int):
+    """
+    Lê cardapio.opcoes e devolve mapa por nome do grupo com props a preservar:
+      { "<nome_grupo>": {"ids": ..., "max_selected": ..., "obrigatorio": ...}, ... }
+    """
+    row = db.execute("SELECT opcoes FROM cardapio WHERE id = :id", id=item_id)
+    if not row or not row[0]["opcoes"]:
+        return {}
+    try:
+        data = json.loads(row[0]["opcoes"])
+    except Exception:
+        return {}
+    out = {}
+    for g in data if isinstance(data, list) else []:
+        nome = (g.get("nome") or "").strip()
+        if not nome:
+            continue
+        out[nome] = {
+            "ids": g.get("ids") or "",
+            "max_selected": g.get("max_selected", 1),
+            "obrigatorio": g.get("obrigatorio", 0),
+        }
+    return out
+
+def _build_opcoes_json_from_table(item_id: int) -> str:
+    """
+    Monta a estrutura JSON de grupos/opções para um item
+    a partir da tabela opcoes (campos: nome_grupo, opcao, valor_extra, esgotado_bool),
+    preservando ids/max_selected/obrigatorio do JSON atual.
+    """
+    rows = db.execute("""
+        SELECT nome_grupo, grupo_slug, opcao, valor_extra, esgotado_bool
+        FROM opcoes
+        WHERE id_cardapio = :id
+        ORDER BY nome_grupo, opcao
+    """, id=item_id) or []
+
+    keep = _read_cardapio_props_map(item_id)
+    grupos = {}
+    for r in rows:
+        gnome = (r["nome_grupo"] or "").strip()
+        if not gnome:
+            continue
+        if gnome not in grupos:
+            base = keep.get(gnome, {})
+            grupos[gnome] = {
+                "nome": gnome,
+                "ids": base.get("ids", ""),
+                "options": [],
+                "max_selected": base.get("max_selected", 1),
+                "obrigatorio": base.get("obrigatorio", 0),
+            }
+        grupos[gnome]["options"].append({
+            "nome": r["opcao"],
+            "valor_extra": float(r["valor_extra"] or 0),
+            "esgotado": int(r["esgotado_bool"] or 0),
+        })
+
+    out = []
+    for gnome in sorted(grupos.keys(), key=lambda s: s.lower()):
+        gobj = grupos[gnome]
+        gobj["options"] = sorted(gobj["options"], key=lambda x: (str(x["nome"]).lower()))
+        out.append(gobj)
+
+    return json.dumps(out, ensure_ascii=False)
+
+# ---------- /opcoes/sync-json ----------
+@app.route("/opcoes/sync-json", methods=["POST"])
+def opcoes_sync_json():
+    """
+    Body:
+      { "items": [1,2,3] }   // IDs de cardapio (obrigatório)
+    Efeito:
+      Reescreve cardapio.opcoes de cada item com base na tabela opcoes.
+    """
+    ensure_schema()
+
+    data = request.get_json(force=True) or {}
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "Forneça 'items' como lista de IDs (ex.: [1,2,3])."}), 400
+
+    item_ids = sorted(list({int(i) for i in items if str(i).isdigit()}))
+    if not item_ids:
+        return jsonify({"error": "Lista 'items' inválida."}), 400
+
+    db.execute("BEGIN")
+    synced = 0
+    try:
+        for iid in item_ids:
+            new_json = _build_opcoes_json_from_table(iid)
+            db.execute(
+                "UPDATE cardapio SET opcoes = :j WHERE id = :id",
+                j=new_json, id=iid
+            )
+            synced += 1
+        db.execute("COMMIT")
+        getCardapio(True)  # broadcast atualização do cardápio
+    except Exception as e:
+        db.execute("ROLLBACK")
+        return jsonify({"error": f"Falha ao sincronizar: {e}"}), 500
+
+    return jsonify({"synced": synced, "items": item_ids})
+
+# ======= /opcoes/group-props-bulk  (editar max_selected, obrigatorio, ids do GRUPO) =======
+@app.route("/opcoes/group-props-bulk", methods=["POST"])
+def opcoes_group_props_bulk():
+    """
+    Body:
+    {
+      "where": { "grupo_slug": "adicionais" },      // obrigatório
+      "restrict_items": [1,2,3],                    // opcional (IDs de cardápio)
+      "set": { "max_selected": 2, "obrigatorio": 1, "ids": "" },  // pelo menos um
+      "dry_run": true|false
+    }
+
+    Efeito:
+      - Descobre os itens que possuem esse grupo (via tabela `opcoes`).
+      - Se dry_run: retorna só o impacto (quantos itens).
+      - Se aplicar: reconstrói o JSON de cada item a partir da TABELA `opcoes`,
+        e sobrescreve as propriedades do grupo alvo (max_selected / obrigatorio / ids).
+    """
+    ensure_schema()
+
+    data = request.get_json(force=True) or {}
+    where = data.get("where") or {}
+    set_ = data.get("set") or {}
+    restrict_items = data.get("restrict_items") or []
+    dry_run = bool(data.get("dry_run"))
+
+    gslug = (where.get("grupo_slug") or "").strip().lower()
+    if not gslug:
+        return jsonify({"error": "where.grupo_slug é obrigatório."}), 400
+
+    # Valida campos do set
+    set_fields = {}
+    if "max_selected" in set_ and set_["max_selected"] is not None:
+        try:
+            ms = int(set_["max_selected"])
+            if ms < 0:
+                return jsonify({"error": "max_selected deve ser >= 0."}), 400
+            set_fields["max_selected"] = ms
+        except Exception:
+            return jsonify({"error": "max_selected inválido (inteiro)."}), 400
+    if "obrigatorio" in set_ and set_["obrigatorio"] is not None:
+        v = set_["obrigatorio"]
+        if v in (0, 1, "0", "1", True, False, "true", "false", "True", "False"):
+            set_fields["obrigatorio"] = 1 if str(v).lower() in ("1", "true") else 0
+        else:
+            return jsonify({"error": "obrigatorio deve ser 0/1/true/false."}), 400
+    if "ids" in set_ and set_["ids"] is not None:
+        # Campo livre string
+        set_fields["ids"] = str(set_["ids"])
+
+    if not set_fields:
+        return jsonify({"error": "Inclua pelo menos um campo em 'set' (max_selected/obrigatorio/ids)."}), 400
+
+    # Monta filtro base para descobrir itens que possuem esse grupo
+    wh = ["grupo_slug = :gs"]
+    params = {"gs": gslug}
+
+    ids = []
+    if restrict_items:
+        ids = [int(x) for x in restrict_items if str(x).isdigit()]
+        if not ids:
+            return jsonify({"error": "restrict_items inválido/vazio."}), 400
+        placeholders = ",".join([f":id{i}" for i in range(len(ids))])
+        wh.append(f"id_cardapio IN ({placeholders})")
+        for i, v in enumerate(ids):
+            params[f"id{i}"] = v
+
+    where_sql = " AND ".join(wh)
+
+    # Coleta itens distintos que possuem esse grupo
+    item_rows = db.execute(
+        f"""
+        SELECT DISTINCT id_cardapio
+        FROM opcoes
+        WHERE {where_sql}
+        ORDER BY id_cardapio
+        """,
+        **params
+    ) or []
+    items = [r["id_cardapio"] for r in item_rows]
+    matched = len(items)
+
+    if dry_run:
+        return jsonify({
+            "matched": matched,
+            "would_update": matched,
+            "items": items,
+            "dry_run": True
+        })
+
+    # Aplica nos JSONs de cada item
+    db.execute("BEGIN")
+    try:
+        for iid in items:
+            # Nome do grupo desse item (para casar com JSON)
+            gr = db.execute(
+                "SELECT MIN(nome_grupo) AS nome FROM opcoes WHERE id_cardapio = :id AND grupo_slug = :gs",
+                id=iid, gs=gslug
+            )
+            group_name = (gr[0]["nome"] if gr and gr[0]["nome"] else "").strip()
+            if not group_name:
+                # não deve ocorrer, pois o item veio da opcoes com esse grupo_slug
+                continue
+
+            # Reconstrói JSON a partir da tabela (garante que grupos/opções estejam atualizados)
+            json_str = _build_opcoes_json_from_table(iid)
+            try:
+                data_json = json.loads(json_str) if json_str else []
+            except Exception:
+                data_json = []
+
+            # Sobrescreve props do grupo alvo
+            changed = False
+            for g in data_json:
+                if (g.get("nome") or "").strip() == group_name:
+                    if "max_selected" in set_fields:
+                        g["max_selected"] = int(set_fields["max_selected"])
+                        changed = True
+                    if "obrigatorio" in set_fields:
+                        g["obrigatorio"] = int(set_fields["obrigatorio"])
+                        changed = True
+                    if "ids" in set_fields:
+                        g["ids"] = set_fields["ids"]
+                        changed = True
+                    break
+
+            if changed:
+                new_str = json.dumps(data_json, ensure_ascii=False)
+                db.execute("UPDATE cardapio SET opcoes = :j WHERE id = :id", j=new_str, id=iid)
+                getCardapio(True)  # broadcast atualização do cardápio
+
+        # Auditoria (reuso da tabela existente)
+        actor = request.headers.get("X-User") or "api"
+        audit_id = db.execute(
+            """
+            INSERT INTO opcoes_audit (actor, where_json, set_json, dry_run, matched, updated, items_json)
+            VALUES (:actor, :w, :s, 0, :m, :u, :items)
+            """,
+            actor=actor,
+            w=json.dumps({"grupo_slug": gslug, "type": "group_props"}, ensure_ascii=False),
+            s=json.dumps(set_fields, ensure_ascii=False),
+            m=matched,
+            u=matched,
+            items=json.dumps(items)
+        )
+        if not audit_id:
+            rid = db.execute("SELECT last_insert_rowid() AS id")[0]["id"]
+            audit_id = rid
+
+        db.execute("COMMIT")
+    except Exception as e:
+        db.execute("ROLLBACK")
+        return jsonify({"error": f"Falha ao aplicar propriedades do grupo: {e}"}), 500
+
+    return jsonify({
+        "matched": matched,
+        "updated": matched,
+        "items": items,
+        "audit_id": audit_id,
+        "dry_run": False
+    })
+
+# ====== HELPERS ======
+def strip_accents_upper(s: str) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    return s.upper()
+
+def sanitize_txid(s: str) -> str:
+    # Especificação permite [a-zA-Z0-9]{1,25}
+    s = re.sub(r"[^A-Za-z0-9]", "", s or "")
+    return s[:25] or "TXID"
+
+def emv(k: str, v: str) -> str:
+    vb = v.encode("utf-8")
+    return f"{k}{len(vb):02d}{v}"
+
+def crc16(payload: str) -> str:
+    # CRC16-CCITT (0x1021)
+    polynomial = 0x1021
+    result = 0xFFFF
+    for ch in payload.encode("utf-8"):
+        result ^= ch << 8
+        for _ in range(8):
+            if (result & 0x8000) != 0:
+                result = (result << 1) ^ polynomial
+            else:
+                result <<= 1
+            result &= 0xFFFF
+    return format(result, "04X")
+
+def strip_accents_ascii(s: str) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    # mantém letras, números, espaço e alguns sinais básicos
+    s = re.sub(r"[^A-Za-z0-9 \-_.]", "", s)
+    return s
+
+def up_to(s: str, n: int) -> str:
+    return (s or "")[:n]
+
+def bytes_len(s: str) -> int:
+    return len((s or "").encode("utf-8"))
+
+def build_pix_payload(key: str, nome: str, cidade: str, valor: float, txid: str, descricao: str = "") -> str:
+    # normalizações
+    nome = up_to(strip_accents_ascii(nome).upper(), 25) or "LOJA"
+    cidade = up_to(strip_accents_ascii(cidade).upper(), 15) or "SAO PAULO"
+    descricao = up_to(strip_accents_ascii(descricao), 40)
+    valor_str = f"{float(valor):.2f}"
+
+    # 00 e 01 (estático)
+    pfi  = emv("00", "01")
+    poim = emv("01", "11")  # <- trocado para 11
+
+    # 26: BR Code Pix
+    gui = emv("00", "BR.GOV.BCB.PIX")
+    mai = gui + emv("01", key)
+    if descricao:
+        mai += emv("02", descricao)
+    mai_full = emv("26", mai)
+
+    # 52/53/54/58/59/60
+    mcc           = emv("52", "0000")
+    currency      = emv("53", "986")
+    amount        = emv("54", valor_str)
+    country       = emv("58", "BR")
+    merchant_name = emv("59", nome)
+    merchant_city = emv("60", cidade)
+
+    # 62: TXID
+    add      = emv("05", txid[:25])
+    add_full = emv("62", add)
+
+    # 63: CRC
+    partial = pfi + poim + mai_full + mcc + currency + amount + country + merchant_name + merchant_city + add_full + "6304"
+    crc = crc16(partial + "0000")
+    return partial + crc
+
+def make_qr_png_base64(data: str) -> str:
+    qr = qrcode.QRCode(
+        version=None,  # ajusta automaticamente
+        error_correction=ERROR_CORRECT_Q,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def normalize_pix_key(key: str) -> str:
+    k = (key or "").strip()
+    # ajuste pelo tipo que você usa de verdade:
+    # CPF:
+    return re.sub(r"\D", "", k)
+#====== ROUTE ======
+@app.post("/pix/qr")
+def gerar_qr():
+    """
+    Espera JSON:
+    {
+      "pedido_id": "WEBABC123",
+      "valor": "49.90" (ou numero),
+      "descricao": "Pedido WEBABC123" (opcional)
+    }
+    Retorna:
+    {
+      "txid": "...",
+      "payload": "<brcode copia e cola>",
+      "qr_png_base64": "data:image/png;base64,..."
+    }
+    """
+    try:
+        data = request.get_json(force=True, silent=False) or {}
+        pedido_id = str(data.get("pedido_id") or "").strip()
+        descricao = str(data.get("descricao") or "")[:40]
+
+        if "valor" not in data:
+            return jsonify({"error": "Campo 'valor' é obrigatório."}), 400
+
+        try:
+            valor = float(str(data.get("valor")).replace(",", "."))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Valor inválido."}), 400
+
+        if valor <= 0:
+            return jsonify({"error": "Valor deve ser maior que zero."}), 400
+
+        txid = sanitize_txid(f"{TXID_PREFIX}{pedido_id}")
+
+        key_norm = normalize_pix_key(PIX_KEY)
+        
+        payload = build_pix_payload(
+            key=PIX_KEY,
+            nome=MERCHANT_NAME,
+            cidade=MERCHANT_CITY,
+            valor=valor,
+            txid=txid,
+            descricao=descricao,
+        )
+
+        print("TOTAL BYTES do payload:", bytes_len(payload))
+
+        qr_b64 = make_qr_png_base64(payload)
+
+        return jsonify({
+            "txid": txid,
+            "payload": payload,          # Pix Copia e Cola
+            "qr_png_base64": qr_b64,      # imagem do QR para exibir/baixar
+            "debug_key_used": key_norm
+        })
+    except Exception as e:
+        # logue e trate como preferir
+        return jsonify({"error": f"Falha ao gerar Pix: {str(e)}"}), 500
+
 
 
 
@@ -2156,31 +3121,4 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8000))
 
     socketio.run(app, host='0.0.0.0', port=port, debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

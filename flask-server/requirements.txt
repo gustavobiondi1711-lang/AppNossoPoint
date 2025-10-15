@@ -29,12 +29,14 @@ packaging==24.1
 pathspec==0.10.1
 pyasn1==0.6.1
 Pygments==2.18.0
+pyjwt==2.10.1
 python-dateutil==2.9.0.post0
 python-engineio==4.11.2
 python-socketio==5.12.1
 pytz==2025.1
 pywin32==308; sys_platform == "win32"
 PyYAML==6.0.2
+qrcode[pill]
 requests==2.32.3
 rich==13.8.0
 rsa==4.7.2

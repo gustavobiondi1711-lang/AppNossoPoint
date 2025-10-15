@@ -123,22 +123,30 @@ export default class VerComandas extends React.Component {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Comandas Abertas</Text>
-          {dataAberto &&
+          {dataAberto.length>0 ?(
             dataAberto.map((item, index) => (
               <TouchableOpacity key={index} onPress={() => this.getCardapio(item, 0)} style={styles.comandaButton}>
                 <Text style={styles.comandaText}>Comanda: {item.comanda}</Text>
               </TouchableOpacity>
-            ))}
+            ))
+          ) : (
+            <Text style={{ color: '#666' }}>Nenhuma comanda aberta.</Text>
+          )
+          }
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Comandas Fechadas</Text>
-          {dataFechado &&
+          {dataFechado.length >0 ? (
             dataFechado.map((item, index) => (
               <TouchableOpacity key={index+1*1000} onPress={() => this.getCardapio(item, item.ordem)} style={styles.comandaButtonClosed}>
                 <Text style={styles.comandaText}>Comanda: {item.comanda}</Text>
               </TouchableOpacity>
-            ))}
+            ))
+          ) : (
+            <Text style={{ color: '#666' }}>Nenhuma comanda fechada.</Text>
+          )
+          }
         </View>
       </ScrollView>
     );

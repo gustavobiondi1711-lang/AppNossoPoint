@@ -1,11 +1,19 @@
 import React from 'react';
-import { StyleSheet, View, Button, TextInput, FlatList, TouchableOpacity, Text,ScrollView,Pressable, Animated} from 'react-native';
+import { StyleSheet, View, Button, TextInput, FlatList, TouchableOpacity, Text,ScrollView,Pressable} from 'react-native';
+import { Animated } from 'react-native';
 import { UserContext } from '../UserContext'; // Import the context
 import { API_URL } from "./url";
 import { Keyboard } from 'react-native';
 import debounce from 'lodash.debounce';
 import { getSocket } from '../socket';
 import NetInfo from "@react-native-community/netinfo";
+
+// formata R$ de forma robusta no RN
+const brl = (n) => {
+  const v = Number(n || 0);
+  const s = (isNaN(v) ? 0 : v).toFixed(2);
+  return `R$ ${s.replace('.', ',')}`;
+};
 
 
 export default class HomeScreen extends React.Component {
@@ -31,7 +39,6 @@ export default class HomeScreen extends React.Component {
       nomeSelecionado:[],
       options:[],
       selecionadosByGroup:[],
-      opcoesSelecionadas:[],
       showPedido: false,
       showComandaPedido: false,
       showComanda:false,
@@ -42,13 +49,22 @@ export default class HomeScreen extends React.Component {
       pedidoRestanteMensagem: null,
       showConfirmOrder: false,
       confirmMsg: 'Pedido enviado com sucesso!',
-      isConnected: true, 
+      isConnected: true,
+      toastVariant: 'success',
+      selectedUnitPrices: [],              // preço unitário (base + extras) por item adicionado
+      opcoesSelecionadasPorItem: [],       // array de seleções por item (p/ render bonitinho)
+
     };
     this.processarPedido = debounce(this.processarPedido.bind(this), 200);
     this.socket = null;
+    this._toastOpacity = new Animated.Value(0);
+    this._toastTranslateY = new Animated.Value(-12);
+    this._hideToastTimer = null;
+    this._isMounted = false;
   }
 
   async componentDidMount() {
+    this._isMounted = true;
     const { user } = this.context || {};
     this.setState({ username: user?.username || "" });
     if (user?.username) console.log(user.username);
@@ -88,6 +104,8 @@ export default class HomeScreen extends React.Component {
   
 
   componentWillUnmount() {
+    this._isMounted = false;
+    if (this._hideToastTimer) clearTimeout(this._hideToastTimer);
     // remover listener do NetInfo
     if (this._netinfoUnsub) {
       this._netinfoUnsub();
@@ -137,11 +155,11 @@ export default class HomeScreen extends React.Component {
     setTimeout(() => this.setState({ showPedido: false }), 0);
   };
   handleSocketConnect = () => {
-    this.showConfirmToast('Conectado novamente!');
+    this.showConfirmToast('Conectado novamente!', 'success');
   };
   
   handleSocketDisconnect = () => {
-    this.showConfirmToast('Sem conexão com o servidor.');
+    this.showConfirmToast('Sem conexão com o servidor.', 'error');
   };
   
   handleNetInfoChange = (state) => {
@@ -150,9 +168,9 @@ export default class HomeScreen extends React.Component {
     if (was !== now) {
       this.setState({ isConnected: now });
       if (!now) {
-        this.showConfirmToast('Sem internet no dispositivo.');
+        this.showConfirmToast('Sem internet no dispositivo.','error');
       } else {
-        this.showConfirmToast('Internet restaurada.');
+        this.showConfirmToast('Internet restaurada.','success');
       }
     }
   };
@@ -222,6 +240,17 @@ normalize = (s) =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
+  // limpa somente o estado da SELEÇÃO ATUAL (chips/opções do item em edição)
+resetCurrentSelection = (extra = {}) => {
+  this.setState({
+    options: [],
+    selecionadosByGroup: [],
+    showQuantidade: false,
+    ...extra, // permite sobrescrever algo quando quiser
+  });
+};
+
+
 changeComanda = (comand) => {
   const base = Array.isArray(this.state.comandaGeral) ? this.state.comandaGeral : [];
   const raw = String(comand.toLowerCase() ?? '');    // mantém como o usuário digitou (com maiúsculas, espaços etc)
@@ -286,35 +315,50 @@ changeComanda = (comand) => {
   });
 };
   
-  showConfirmToast = (msg = 'Solicitação enviada com sucesso!') => {
-    // atualiza mensagem e mostra
-    this.setState({ showConfirmOrder: true, confirmMsg: msg }, () => {
-      Animated.parallel([
-        Animated.timing(this._toastOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-        Animated.timing(this._toastTranslate, { toValue: 0, duration: 180, useNativeDriver: true }),
-      ]).start();
+showConfirmToast = (msg = 'Tudo certo!', variant = 'success') => {
+  if (!this._isMounted || !this._toastOpacity || !this._toastTranslateY) return;
 
-      if (this._hideToastTimer) clearTimeout(this._hideToastTimer);
-      this._hideToastTimer = setTimeout(this.hideConfirmToast, 2000); // 2s
-    });
-  };
-
-  hideConfirmToast = () => {
+  this.setState({ showConfirmOrder: true, confirmMsg: msg, toastVariant: variant }, () => {
     Animated.parallel([
-      Animated.timing(this._toastOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
-      Animated.timing(this._toastTranslate, { toValue: -12, duration: 160, useNativeDriver: true }),
+      Animated.timing(this._toastOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.timing(this._toastTranslateY, { toValue: 0, duration: 180, useNativeDriver: true }),
     ]).start(() => {
-      this.setState({ showConfirmOrder: false });
+      if (this._hideToastTimer) clearTimeout(this._hideToastTimer);
+      this._hideToastTimer = setTimeout(() => {
+        if (this._isMounted) this.hideConfirmToast();
+      }, 2000);
     });
-  };
+  });
+};
+
+
+hideConfirmToast = () => {
+  if (!this._isMounted || !this._toastOpacity || !this._toastTranslateY) return;
+  Animated.parallel([
+    Animated.timing(this._toastOpacity, {
+      toValue: 0,
+      duration: 160,
+      useNativeDriver: true,
+    }),
+    Animated.timing(this._toastTranslateY, {
+      toValue: -12,
+      duration: 160,
+      useNativeDriver: true,
+    }),
+  ]).start(() => {
+    if (this._isMounted) this.setState({ showConfirmOrder: false });
+  });
+};
+
+
 
 
   changePedido = (pedid) => {
     const pedido = String(pedid).toLowerCase();
+    this.resetCurrentSelection();
     this.setState({
       pedido,
-      selecionadosByGroup: [],
-      options: []
+      showPedido: !!pedido,
     });
 
     this.processarPedido(pedido);
@@ -381,27 +425,7 @@ changeComanda = (comand) => {
     
   getCurrentTime = () => new Date().toTimeString().slice(0, 5);
 
-  showConfirmToast = (msg = 'Solicitação enviada com sucesso!') => {
-    // atualiza mensagem e mostra
-    this.setState({ showConfirmOrder: true, confirmMsg: msg }, () => {
-      Animated.parallel([
-        Animated.timing(this._toastOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
-        Animated.timing(this._toastTranslate, { toValue: 0, duration: 180, useNativeDriver: true }),
-      ]).start();
-
-      if (this._hideToastTimer) clearTimeout(this._hideToastTimer);
-      this._hideToastTimer = setTimeout(this.hideConfirmToast, 2000); // 2s
-    });
-  };
-
-  hideConfirmToast = () => {
-    Animated.parallel([
-      Animated.timing(this._toastOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
-      Animated.timing(this._toastTranslate, { toValue: -12, duration: 160, useNativeDriver: true }),
-    ]).start(() => {
-      this.setState({ showConfirmOrder: false });
-    });
-  };
+  
 
 
   verificarExistenciaPedidos(pedido){
@@ -416,17 +440,18 @@ changeComanda = (comand) => {
     }
     else return false
   }
+  
   else return true
   }
   
   sendData = async () => {
     const net = await NetInfo.fetch();
     if (!net.isConnected) {
-      this.showConfirmToast('Sem internet. Tente novamente.');
+      this.showConfirmToast('Sem internet. Tente novamente.','error');
       return;
     }
     if (!this.socket || !this.socket.connected) {
-      this.showConfirmToast('Sem conexão com o servidor. Aguarde reconexão.');
+      this.showConfirmToast('Sem conexão com o servidor. Aguarde reconexão.','error');
       return;
     }
 
@@ -435,7 +460,7 @@ changeComanda = (comand) => {
     if(this.verificarExistenciaPedidos(pedido)){
       
     const comand = this.state.comand.trim()
-    const { nome,nomeSelecionado, pedidosSelecionados, quantidadeSelecionada, extraSelecionados, quantidade, extra,opcoesSelecionadas, username,options,selecionados} = this.state;
+    const { nome,nomeSelecionado, pedidosSelecionados, quantidadeSelecionada, extraSelecionados, quantidade, extra, username,options,selecionados} = this.state;
     const currentTime = this.getCurrentTime();
     console.log(nomeSelecionado)
     
@@ -454,6 +479,8 @@ changeComanda = (comand) => {
       quantidadeSelecionada.forEach((q, i) => {
         if (q > 0) indicesValidos.push(i);
       });
+      const NovasSelecoes = indicesValidos.map(i => this.state.opcoesSelecionadasPorItem[i] || []);
+
       const NovosPedidos=[]
       pedidosSelecionados.map((p,i)=>{
         for (let j=0;j<indicesValidos.length;j++){
@@ -495,12 +522,43 @@ changeComanda = (comand) => {
         nomeSelecionado:NovosNomes,
         horario: currentTime,
         username:username,
-        opcoesSelecionadas:opcoesSelecionadas,
+        opcoesSelecionadas: NovasSelecoes,
         token_user:user.token
       });
-      this.setState({ comand: '', pedido: '',pedidosSelecionados: [],showPedidoSelecionado:false,showPedido:false,showComandaPedido:false, quantidadeSelecionada: [], extraSelecionados: [],comanda_filtrada:[],comanda_filtrada_abrir:[], quantidade: 1, showQuantidade: false, showPedidoSelecionado: false,nome:'',nomeSelecionado:[],showComanda:false,opcoesSelecionadas:[],selecionados:[]});
+      this.showConfirmToast('Enviado ✅', 'success' );
+      this.setState({
+        // inputs
+        comand: '',
+        pedido: '',
+        extra: '',
+        nome: '',
+        // carrinho
+        pedidosSelecionados: [],
+        quantidadeSelecionada: [],
+        extraSelecionados: [],
+        nomeSelecionado: [],
+        opcoesSelecionadasPorItem: [],
+        selectedUnitPrices: [],
+        // UI
+        showPedidoSelecionado: false,
+        showPedido: false,
+        showComandaPedido: false,
+        comanda_filtrada: [],
+        comanda_filtrada_abrir: [],
+        quantidade: 1,
+        showQuantidade: false,
+        showComanda: false,
+        // seleção atual (chips)
+        options: [],
+        selecionadosByGroup: [],
+      });
+      
     } else if (comand && pedido && quantidade) {
-      console.log('fetch')
+      // valida obrigatório antes do fetch (quando há opções na tela)
+      if ((this.state.options || []).length) {
+        const { ok, msg } = this.validateRequiredGroups();
+        if (!ok) { this.showConfirmToast(msg || 'Seleção incompleta.', 'warning'); return; }
+      }
       fetch(`${API_URL}/verificar_quantidade`, {  
         method: 'POST',
         headers: {
@@ -519,16 +577,21 @@ changeComanda = (comand) => {
         this.setState({
           comand: '',
           pedido: '',
-          extra: '',
-          nome:'',
           quantidade: 1,
-          showQuantidade: false,
+          extra: '',
+          nome: '',
+          showComandaPedido: false,
           showPedidoSelecionado: false,
-          showPedido:false,
-          comanda_filtrada:[],
-          comanda_filtrada_abrir:[],
-          showComandaPedido:false,
-        })
+          showPedido: false,
+          showQuantidade: false,
+          // seleção atual:
+          options: [],
+          selecionadosByGroup: [],
+          // auxiliares do carrinho também zeram porque só havia 1 item:
+          opcoesSelecionadasPorItem: [],
+          selectedUnitPrices: [],
+        });
+        
         const quantidade = data.quantidade
         const quantidadeRestante = 'quantidade estoque insuficiente. Restam apenas '+String(quantidade)
         alert(quantidadeRestante)
@@ -554,11 +617,29 @@ changeComanda = (comand) => {
           comanda_filtrada:[],
           comanda_filtrada_abrir:[],
           username:username,
-          opcoesSelecionadas:this.buildSelectionFromState(),
+          opcoesSelecionadas: [ this.buildSelectionFromState() ],
           token_user:user.token
         });
+        this.showConfirmToast('Enviado ✅','success' );
 
-        this.setState({ comand: '', pedido: '', quantidade: 1, extra: '',nome:'',showComandaPedido:false,showPedidoSelecionado:false,showPedido:false,opcoesSelecionadas:[],selecionadosByGroup:[],options:[],showQuantidade:false});
+        this.setState({
+          comand: '',
+          pedido: '',
+          quantidade: 1,
+          extra: '',
+          nome: '',
+          showComandaPedido: false,
+          showPedidoSelecionado: false,
+          showPedido: false,
+          showQuantidade: false,
+          // seleção atual:
+          options: [],
+          selecionadosByGroup: [],
+          // auxiliares do carrinho também zeram porque só havia 1 item:
+          opcoesSelecionadasPorItem: [],
+          selectedUnitPrices: [],
+        });
+        
       }
     
     })
@@ -586,6 +667,7 @@ normalizeGroups = (raw) => {
     const nome = g?.nome ?? g?.Nome ?? 'Opções';
     const ids = g?.ids ?? '';
     const max_selected = Number(g?.max_selected ?? 1) || 1;
+    const obrigatorio = !!(g?.obrigatorio || g?.Obrigatorio);
     let options = g?.options ?? g?.opcoes ?? [];
 
     if (!Array.isArray(options)) options = [];
@@ -594,12 +676,61 @@ normalizeGroups = (raw) => {
       return {
         nome: o?.nome ?? String(o ?? ''),
         valor_extra: Number(o?.valor_extra ?? 0) || 0,
+        esgotado: !!o?.esgotado,
+
       };
     });
 
-    return { nome, ids, options, max_selected };
+    return { nome, ids, options, max_selected, obrigatorio }
   });
 };
+
+// retorna true/false e uma mensagem (se houver erro)
+validateRequiredGroups = () => {
+  const { options, selecionadosByGroup } = this.state;
+  for (let i = 0; i < (options || []).length; i++) {
+    const g = options[i];
+    if (!g) continue;
+    if (g.obrigatorio) {
+      const sel = selecionadosByGroup[i] || [];
+      // considera "obr." atendido se houver pelo menos uma opção selecionada
+      if (!sel.length) {
+        return { ok: false, msg: `Selecione ao menos 1 opção em "${g.nome}".` };
+      }
+    }
+  }
+  return { ok: true };
+};
+
+// soma dos extras com base na seleção atual (em memória)
+computeExtrasFromSelection = () => {
+  const selection = this.buildSelectionFromState(); // já existente
+  let sum = 0;
+  for (const g of selection) {
+    for (const o of g.options || []) {
+      sum += Number(o.valor_extra || 0);
+    }
+  }
+  return sum;
+};
+
+// encontra o preço base do item atual digitado (ou selecionado)
+getItemBasePrice = (itemName) => {
+  const base = Array.isArray(this.state.dataFixo) ? this.state.dataFixo : [];
+  const found = base.find(it => String(it.item || '').toLowerCase() === String(itemName || '').toLowerCase());
+  const preco = found ? Number(found.preco || 0) : 0;
+  return isNaN(preco) ? 0 : preco;
+};
+
+// faz um "resumo" de seleção p/ exibir no card do item adicionado
+summarizeSelection = (selGroups = []) => {
+  // selGroups: [{nome, options:[{nome, valor_extra}]}...]
+  return selGroups.map(g => {
+    const itens = (g.options || []).map(o => o.valor_extra ? `${o.nome} (+${brl(o.valor_extra)})` : o.nome);
+    return `${g.nome}: ${itens.join(', ') || '—'}`;
+  }).join(' • ');
+};
+
 
 // Enforce do max_selected por grupo
 toggleOption = (groupIndex, optionName) => {
@@ -608,6 +739,14 @@ toggleOption = (groupIndex, optionName) => {
     const selected = [...(selecionadosByGroup[groupIndex] || [])];
     const group = prev.options[groupIndex];
     if (!group) return null;
+
+   // Bloqueia clique em opção esgotada
+   const opt = (group.options || []).find(o => o.nome === optionName);
+   if (opt && opt.esgotado) {
+     // opcional: dar um feedback
+     this.showConfirmToast('Opção esgotada', 'warning');
+     return null;
+   }
 
     const maxSel = Number(group.max_selected || 1);
     const already = selected.includes(optionName);
@@ -633,6 +772,8 @@ toggleOption = (groupIndex, optionName) => {
 // Constrói a seleção estruturada para envio ao backend
 buildSelectionFromState = () => {
   const { options, selecionadosByGroup } = this.state;
+  if (!options || !options.length) return [];  // 🔑 nada selecionável
+
   return options.map((g, idx) => {
     const escolhidos = new Set(selecionadosByGroup[idx] || []);
     const opts = g.options
@@ -659,21 +800,23 @@ buildSelectionFromState = () => {
     }
   };
 
-  selecionarPedido = (pedid,id) => {
-    const pedido = pedid.trim()
-    console.log(pedido)
-    this.setState({ pedido, pedido_filtrado: [], showQuantidade: true });
-    const pedidoRow = this.state.dataFixo.filter(item=>item.id==id)
-    if (pedidoRow.length>0 && pedidoRow[0].opcoes){
-      const groups = this.normalizeGroups(pedidoRow[0].opcoes);
-        this.setState({
-          options: groups,
-          selecionadosByGroup: groups.map(() => []), // zera seleção por grupo
-      });
-    }
-    
+  selecionarPedido = (pedid, id) => {
+    const pedido = pedid.trim();
+    const row = (this.state.dataFixo || []).find(r => String(r.id) == String(id))
+             || (this.state.dataFixo || []).find(r => String(r.item || '').trim().toLowerCase() === pedido.toLowerCase());
+    const groups = this.normalizeGroups(row?.opcoes);
+  
+    this.setState({
+      pedido,
+      pedido_filtrado: [],
+      showQuantidade: true,
+      options: groups,
+      selecionadosByGroup: groups.map(() => []),
+    });
+  };
+  
 
-    };
+  
   selecionarComandaPedido =(comand) =>{
     this.setState({ comand, comanda_filtrada: [], showComandaPedido:false})
   }
@@ -687,69 +830,88 @@ buildSelectionFromState = () => {
   mudar_quantidade = (quantidade) => this.setState({ quantidade: parseInt(quantidade) || 1 });
   
   adicionarPedido = () => {
-    const pedido = this.state.pedido.trim()
-
-    const {showQuantidade, quantidade} = this.state;
+    const pedido = this.state.pedido.trim();
+    const { showQuantidade, quantidade } = this.state;
     
-    if(showQuantidade){
-    fetch(`${API_URL}/verificar_quantidade`, {  // Endpoint correto
+    if (showQuantidade) {
+     // 1) valida grupos obrigatórios antes de consultar estoque
+   const { ok, msg } = this.validateRequiredGroups();
+   if (!ok) {
+     this.showConfirmToast(msg || 'Seleção incompleta.', 'warning');
+     return;
+   }
+      fetch(`${API_URL}/verificar_quantidade`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            item: pedido,
-            quantidade: quantidade
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.erro) {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item: pedido, quantidade }),
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          if (data.erro) {
             this.setState({
-                quantidade: 1,
-                showQuantidade: false,
-                pedido: '',
-                extra: '',
-                nome:'',
-                showPedido: false,
-                options:[],
+              quantidade: 1,
+              showQuantidade: false,
+              pedido: '',
+              extra: '',
+              nome: '',
+              showPedidoSelecionado: false,
+              showPedido: false,
+              options: [],
+              selecionadosByGroup: [],
             
-
             });
-            const quantidade = data.quantidade
-            const quantidadeRestante = 'quantidade estoque insuficiente. Restam apenas '+String(quantidade)
-            alert(quantidadeRestante)
-
-        } else {
-            const { pedido, quantidade, extra, nome, selecionados} = this.state;
-            const quantidadeR = data.quantidade
-            const novaQ = parseFloat(quantidadeR)-quantidade
-            if (novaQ){
-              const alerta = 'ATENCAO RESTAM APENAS '+String(novaQ)+'\nRECOMENDADO REPOR ESTOQUE!'
-              alert(alerta)
+            const quantidade = data.quantidade;
+            alert('Quantidade insuficiente. Restam apenas ' + String(quantidade));
+          } else {
+            const { pedido, quantidade, extra, nome } = this.state;
+             // 2) monta seleção atual e calcula o preço unit (base + extras)
+          const selection = this.buildSelectionFromState();  // [{nome, ids, options:[{nome, valor_extra}], max_selected}, ...]
+          const extrasSum = this.computeExtrasFromSelection(); // soma dos valor_extra
+          const basePrice = this.getItemBasePrice(pedido);
+          const unitPrice = basePrice + extrasSum;
+            const quantidadeR = data.quantidade;
+            const novaQ = parseFloat(quantidadeR) - quantidade;
+            if (novaQ) {
+              alert(
+                'ATENÇÃO: restam apenas ' +
+                  String(novaQ) +
+                  '\nRecomenda-se repor estoque!'
+              );
             }
-
-            this.setState((prevState) => ({
-                pedidosSelecionados: [...prevState.pedidosSelecionados, pedido],
-                quantidadeSelecionada: [...prevState.quantidadeSelecionada, quantidade],
-                extraSelecionados: extra ? [...prevState.extraSelecionados, extra] : [...prevState.extraSelecionados, ''],
-                nomeSelecionado: nome? [...prevState.nomeSelecionado, nome] : [...prevState.nomeSelecionado, ''],
-                quantidade: 1,
-                showQuantidade: false,
-                pedido: '',
-                extra: '',
-                nome:'',
-                showPedidoSelecionado: true,
-                showPedido: false,
-                options:[],
-                selecionadosByGroup: [],
-                opcoesSelecionadas: [...prevState.opcoesSelecionadas, ...this.buildSelectionFromState()],
+  
+            this.setState((prev) => ({
+              pedidosSelecionados: [...prev.pedidosSelecionados, pedido],
+              quantidadeSelecionada: [...prev.quantidadeSelecionada, quantidade],
+              extraSelecionados: extra
+                ? [...prev.extraSelecionados, extra]
+                : [...prev.extraSelecionados, ''],
+              nomeSelecionado: nome
+                ? [...prev.nomeSelecionado, nome]
+                : [...prev.nomeSelecionado, ''],
+                // guarda o preço unitário e a seleção (p/ render)
+              selectedUnitPrices: [...prev.selectedUnitPrices, unitPrice],
+              opcoesSelecionadasPorItem: [...prev.opcoesSelecionadasPorItem, selection],
+              quantidade: 1,
+              showQuantidade: false,
+              pedido: '',
+              extra: '',
+              nome: '',
+              showPedidoSelecionado: true,
+              showPedido: false,
+              options: [],
+              selecionadosByGroup: [],
             }));
-        }
-    })
-    .catch(error => console.error('Erro ao adicionar pedido:', error));
-    this.showConfirmToast('Erro de conexão. Tente novamente.');
-  }};
+  
+            
+          }
+        })
+        .catch((error) => {
+          console.error('Erro ao adicionar pedido:', error);
+   
+        });
+    }
+  };
+  
 
 
   adicionarPedidoSelecionado = (index) => this.setState((prevState) => ({ quantidadeSelecionada: prevState.quantidadeSelecionada.map((q, i) => (i === index ? q + 1 : q)) }));
@@ -760,28 +922,48 @@ buildSelectionFromState = () => {
   }
   renderConfirmToast() {
     if (!this.state.showConfirmOrder) return null;
+    if (!this._toastOpacity || !this._toastTranslateY) return null;
+  
+    const { toastVariant } = this.state;
+    const bg =
+      toastVariant === 'error'   ? '#ef4444' : // red-500
+      toastVariant === 'warning' ? '#f59e0b' : // amber-500
+      toastVariant === 'info'    ? '#3b82f6' : // blue-500
+                                   '#22c55e';  // green-500 (success)
+  
     return (
       <Animated.View
         pointerEvents="none"
-        style={[
-          {
-            position: 'absolute',
-            top: 16,
-            right: 16,
-            zIndex: 999,
-            opacity: this._toastOpacity,
-            transform: [{ translateY: this._toastTranslate }],
-          },
-          styles.toastShadow,
-        ]}
+        style={{
+          position: "absolute",
+          top: 16,
+          right: 16,
+          zIndex: 999,
+          opacity: this._toastOpacity,
+          transform: [{ translateY: this._toastTranslateY }],
+        }}
       >
-        <View style={styles.toastContainer}>
-          <View style={styles.toastDot} />
-          <Text style={styles.toastText}>{this.state.confirmMsg}</Text>
+        <View style={{
+          backgroundColor: bg,
+          paddingVertical: 10,
+          paddingHorizontal: 14,
+          borderRadius: 8,
+          flexDirection: "row",
+          alignItems: "center",
+        }}>
+          <View style={{
+            width: 12, height: 12, borderRadius: 6,
+            backgroundColor: 'rgba(255,255,255,0.9)', marginRight: 8
+          }} />
+          <Text style={{ color: "#fff", fontWeight: "700" }}>
+            {this.state.confirmMsg}
+          </Text>
         </View>
       </Animated.View>
     );
   }
+  
+  
 
     
   changeExtra = (extra) => this.setState({ extra });
@@ -847,38 +1029,44 @@ buildSelectionFromState = () => {
               return (
                 <View key={gIdx} style={styles.categoriaContainer}>
                   <View style={styles.categoriaHeader}>
-                    <Text style={styles.categoriaTitle}>{group.nome}</Text>
+                    <Text style={styles.categoriaTitle}>{group.nome} {group.obrigatorio ? ' *' : ''}</Text>
                     <Text style={styles.categoriaCounter}>{selCount}/{maxSel}</Text>
                   </View>
 
                   <View style={styles.optionGrid}>
                     {group.options.map((opt, oIdx) => {
                       const isSelected = selecionados.has(opt.nome);
-                      const label = opt.valor_extra ? `${opt.nome} (+${opt.valor_extra})` : opt.nome;
+                      const isDisabled = !!opt.esgotado;
+
+                      const label = opt.valor_extra ? `${opt.nome} (+${brl(opt.valor_extra)})` : opt.nome;
                       return (
                         <TouchableOpacity
                           key={oIdx}
-                          onPress={() => this.toggleOption(gIdx, opt.nome)}
+                          onPress={() => !isDisabled && this.toggleOption(gIdx, opt.nome)}
                           activeOpacity={0.8}
                           style={[
                             styles.optionChip,
-                            isSelected && styles.optionChipSelected
+                            isSelected && styles.optionChipSelected,
+                            isDisabled && styles.optionChipDisabled,
                           ]}
                         >
                           <Text
                             style={[
                               styles.optionChipText,
-                              isSelected && styles.optionChipTextSelected
+                              isSelected && styles.optionChipTextSelected,
+                              isDisabled && styles.optionChipTextDisabled,
+
                             ]}
                             numberOfLines={2}
                           >
-                            {label}
+                            {isDisabled ? `${label} (esgotado)` : label}
                           </Text>
 
                           <View
                             style={[
                               styles.optionDot,
-                              isSelected && styles.optionDotSelected
+                              isSelected && styles.optionDotSelected,
+                              isDisabled && styles.optionDotDisabled,
                             ]}
                           />
                         </TouchableOpacity>
@@ -949,16 +1137,35 @@ buildSelectionFromState = () => {
                 <Button title="Enviar pedido" onPress={this.sendData} />
               )}
             </View>
-            {this.state.showPedidoSelecionado && this.state.pedidosSelecionados.map((item, index) => (
-              <View key={index} style={styles.pedidoEditItem}>
-                <Text>{item}</Text>
-                <View style={styles.pedidoEditControls}>
-                  <Button title="-" color="red" onPress={() => this.removerPedidoSelecionado(index)} />
-                  <Text>{this.state.quantidadeSelecionada[index]}</Text>
-                  <Button title="+" onPress={() => this.adicionarPedidoSelecionado(index)} />
-                </View>
-              </View>
-            ))}
+            {this.state.pedidosSelecionados.map((item, index) => {
+  const qtd = this.state.quantidadeSelecionada[index] || 1;
+  const unit = this.state.selectedUnitPrices[index] || 0;
+  const resumo = this.summarizeSelection(this.state.opcoesSelecionadasPorItem[index] || []);
+  const extraTxt = this.state.extraSelecionados[index] || '';
+
+  return (
+    <View key={index} style={styles.cartItemCard}>
+      <View style={styles.cartItemHeader}>
+        <Text style={styles.cartItemTitle}>{item}</Text>
+        <Text style={styles.cartItemSubtitle}>unit: {brl(unit)}</Text>
+      </View>
+
+      <View style={styles.cartItemBody}>
+        {!!resumo && <Text style={styles.cartItemLine}>Opções: {resumo}</Text>}
+        {!!extraTxt && <Text style={styles.cartItemLine}>Extra: {extraTxt}</Text>}
+      </View>
+
+      <View style={styles.cartItemPriceRow}>
+        <View style={styles.cartQtyControls}>
+          <Button title="-" color="red" onPress={() => this.removerPedidoSelecionado(index)} />
+          <Text>{qtd}</Text>
+          <Button title="+" onPress={() => this.adicionarPedidoSelecionado(index)} />
+        </View>
+        <Text style={styles.cartItemTitle}>{brl(unit * qtd)}</Text>
+      </View>
+    </View>
+  );
+})}
           </View>
         </ScrollView>
       </View>
@@ -1136,6 +1343,11 @@ const styles = StyleSheet.create({
     borderColor: '#16a34a',
     backgroundColor: '#ecfdf5',
   },
+ optionChipDisabled: {
+   opacity: 0.5,
+   backgroundColor: '#f3f4f6',
+ },
+    
   
   optionChipText: {
     fontSize: 14,
@@ -1145,6 +1357,10 @@ const styles = StyleSheet.create({
   optionChipTextSelected: {
     fontWeight: '600',
   },
+  optionChipTextDisabled: {
+       textDecorationLine: 'line-through',
+       color: '#6b7280',
+     },
   
   // bolinha de status no chip
   optionDot: {
@@ -1157,6 +1373,41 @@ const styles = StyleSheet.create({
   optionDotSelected: {
     backgroundColor: '#16a34a',
   },
+  optionDotDisabled: {
+       backgroundColor: '#e5e7eb',
+     },
+         // ---- Cards dos itens adicionados ----
+     cartItemCard: {
+       borderWidth: 1,
+       borderColor: '#e5e7eb',
+       borderRadius: 12,
+       padding: 10,
+       marginVertical: 6,
+       backgroundColor: '#ffffff',
+       shadowColor: '#000',
+       shadowOpacity: 0.06,
+       shadowRadius: 4,
+       shadowOffset: { width: 0, height: 2 },
+       elevation: 2,
+     },
+     cartItemHeader: {
+       flexDirection: 'row',
+       alignItems: 'center',
+       justifyContent: 'space-between',
+       marginBottom: 6,
+     },
+     cartItemTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+     cartItemSubtitle: { fontSize: 12, color: '#6b7280' },
+     cartItemBody: { marginTop: 4, gap: 4 },
+     cartItemLine: { fontSize: 13, color: '#374151' },
+     cartItemPriceRow: {
+       flexDirection: 'row',
+       alignItems: 'center',
+       justifyContent: 'space-between',
+       marginTop: 8,
+     },
+     cartQtyControls: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    
   toastContainer: {
     backgroundColor: '#22c55e', // verde (tailwind emerald-500)
     paddingVertical: 10,

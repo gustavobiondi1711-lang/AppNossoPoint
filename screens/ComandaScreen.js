@@ -279,6 +279,89 @@ class ComandaScreen extends React.Component {
       this.setState({ pagandoLoading: false });
     }
   };
+  // formata simples
+fmtBRL = (v) => {
+  const n = parseFloat(String(v ?? '').replace(',', '.'));
+  return `R$ ${Number.isFinite(n) ? n.toFixed(2) : '0.00'}`;
+};
+// Lê e normaliza o campo opcoes (string JSON, array ou objeto)
+parseOpcoes = (raw) => {
+  try {
+    const j = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    let groups = Array.isArray(j) ? j : (j?.groups || j?.opcoes || j?.options || []);
+    if (!Array.isArray(groups)) groups = [];
+    return groups.map(g => {
+      let opts = g?.options ?? g?.opcoes ?? [];
+      if (!Array.isArray(opts)) opts = [];
+      return { options: opts };
+    });
+  } catch {
+    return [];
+  }
+};
+
+// true se existir ALGUMA option com valor_extra > 0
+hasExtrasComValor = (it) => {
+  const groups = this.parseOpcoes(it?.opcoes);
+  for (const g of groups) {
+    for (const o of (g.options || [])) {
+      if (Number(o?.valor_extra || 0) > 0) return true;
+    }
+  }
+  return false;
+};
+
+// Texto "Opções: ..." apenas com as de valor_extra > 0
+extrasLabel = (it) => {
+  const groups = this.parseOpcoes(it?.opcoes);
+  const list = [];
+  for (const g of groups) {
+    for (const o of (g.options || [])) {
+      const v = Number(o?.valor_extra || 0);
+      if (v > 0) list.push(`${o.nome} (+R$ ${v.toFixed(2).replace('.', ',')})`);
+    }
+  }
+  return list.join(', ');
+};
+
+// parse das opções selecionadas (o que foi salvo no campo "opcoes")
+parseOpcoesSelecionadas = (raw) => {
+  if (!raw) return [];
+  let data = raw;
+  try {
+    if (typeof raw === 'string') data = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];         // esperado: lista de grupos
+  // flatten: retorna apenas as options de cada grupo
+  const out = [];
+  for (const g of data) {
+    const options = Array.isArray(g?.options) ? g.options : [];
+    for (const o of options) {
+      const nome = o?.nome ?? '';
+      const valor_extra = parseFloat(o?.valor_extra ?? 0) || 0;
+      out.push({ nome, valor_extra });
+    }
+  }
+  return out;
+};
+
+// retorna SOMENTE as opções com extra > 0
+getSelectedExtras = (it) => {
+  const arr = this.parseOpcoesSelecionadas(it?.opcoes);
+  return arr.filter(o => (parseFloat(o.valor_extra) || 0) > 0);
+};
+
+// condição para exibir opções (seguindo seu critério)
+shouldShowOptions = (it) => {
+  const preco = parseFloat(String(it?.preco ?? '0').replace(',', '.')) || 0;
+  // se vier do backend, usa; senão cai no unitário calculado
+  const preco_unitario_backend = parseFloat(String(it?.preco_unitario ?? '').replace(',', '.'));
+  const unitCalc = this.getUnitPrice(it); // já existe na sua classe
+  const pu = Number.isFinite(preco_unitario_backend) ? preco_unitario_backend : unitCalc;
+  return preco > 0 && pu < preco;
+};
 
   // --- confirmar pagamento dos itens selecionados
   confirmPayItems = async () => {
@@ -853,9 +936,17 @@ class ComandaScreen extends React.Component {
 
       return (
         <View key={`np-${index}`} style={styles.tableRow}>
-          <Text style={[styles.itemText, { flex: 2 }]} numberOfLines={2}>
-            {it.pedido} {it.extra}
-          </Text>
+           <View style={{ flex: 2 }}>
+            <Text style={styles.itemText} numberOfLines={2}>
+              {it.pedido} {it.extra}
+            </Text>
+            {this.hasExtrasComValor(it) && (
+              <Text style={styles.itemExtrasText} numberOfLines={2}>
+                Opções: {this.extrasLabel(it)}
+              </Text>
+            )}
+          </View>
+
           <Text style={[styles.itemText, { flex: 0.8, textAlign: 'center' }]}>{restante}</Text>
           <Text style={[styles.itemText, { flex: 0.9, textAlign: 'right' }]}>{it.preco}</Text>
 
@@ -887,40 +978,48 @@ class ComandaScreen extends React.Component {
 
 
   
-    const RowPago = ({ it, index, qtdPaga }) => (
-      <View key={`pg-${index}`} style={styles.tableRow}>
-        <Text style={[styles.itemText, { flex: 2 }]} numberOfLines={2}>
-          {it.pedido} {it.extra}
-        </Text>
-        <Text style={[styles.itemText, { flex: 0.8, textAlign: 'center' }]}>{qtdPaga}</Text>
-        <Text style={[styles.itemText, { flex: 0.9, textAlign: 'right', color: '#059669' }]}>
-          Pago
-        </Text>
-      </View>
-    );
+      const RowPago = ({ it, index, qtdPaga }) => (
+        <View key={`pg-${index}`} style={styles.tableRow}>
+          <View style={{ flex: 2 }}>
+            <Text style={styles.itemText} numberOfLines={2}>
+              {it.pedido} {it.extra}
+            </Text>
+            {this.hasExtrasComValor(it) && (
+              <Text style={styles.itemExtrasText} numberOfLines={2}>
+                Opções: {this.extrasLabel(it)}
+              </Text>
+            )}
+          </View>
 
-    return (
-      <View>
-        {pagos.length > 0 && (
-          <>
-            <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Pagos</Text>
-            {pagos.map(({ it, index, qtdPaga }) => (
-              <RowPago key={`pg-${index}`} it={it} index={index} qtdPaga={qtdPaga} />
-            ))}
-          </>
-        )}
+          <Text style={[styles.itemText, { flex: 0.8, textAlign: 'center' }]}>{qtdPaga}</Text>
+          <Text style={[styles.itemText, { flex: 0.9, textAlign: 'right', color: '#059669' }]}>
+            Pago
+          </Text>
+        </View>
+      );
 
-        {naoPagos.length > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>Não pagos</Text>
-            {naoPagos.map(({ it, index, restante }) => (
-              <RowNaoPago key={`np-${index}`} it={it} index={index} restante={restante} />
-            ))}
-          </>
-        )}
-      </View>
-    );
-  }
+      return (
+        <View>
+          {pagos.length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { marginTop: 12 }]}>Pagos</Text>
+              {pagos.map(({ it, index, qtdPaga }) => (
+                <RowPago key={`pg-${index}`} it={it} index={index} qtdPaga={qtdPaga} />
+              ))}
+            </>
+          )}
+
+          {naoPagos.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Não pagos</Text>
+              {naoPagos.map(({ it, index, restante }) => (
+                <RowNaoPago key={`np-${index}`} it={it} index={index} restante={restante} />
+              ))}
+            </>
+          )}
+        </View>
+      );
+    }
 
   // abre o modal de pagamento e define o contexto
   abrirModalPagamento = (tipo) => {
@@ -1449,6 +1548,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#ef4444',
   },
   paymentDeleteText: { color: '#fff', fontWeight: '800' },
+  itemOptionsText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  itemExtrasText: {
+    fontSize: 12.5,
+    color: '#6b7280',
+    marginTop: 2,
+  },  
   
 });
 
