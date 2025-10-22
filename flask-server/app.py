@@ -194,6 +194,22 @@ def validate_token_on_qr():
     print('invalid token or expired')
     return jsonify({'valid': False}), 200
 
+
+@app.route('/delete_promotion', methods=['POST'])
+def deletar_promocao():
+    try:
+        print('entrou delete promotion')
+        data=request.get_json()
+        id=data.get('id')
+        print('id',id)
+        db.execute('DELETE FROM promotions WHERE id= ?',id)
+        dados = db.execute('SELECT * FROM promotions')
+        return jsonify({'status': 'success'}),200
+    except Exception as e:
+        print('Erro ao excluir promoção:', e)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route('/guardar_login', methods=['POST'])
 def guardar_login():
     
@@ -508,7 +524,7 @@ def getPedidos(emitirBroadcast):
 @socketio.on('getItensPromotion')
 def getPedidosPromotion(emitirBroadcast):
     dia = datetime.now(brazil).date()
-    dataCardapio = db.execute('SELECT id,item FROM cardapio')
+    dataCardapio = db.execute('SELECT id,item,preco_base FROM cardapio')
     if dataCardapio:
         emit('respostaItensPromotion',{'dataCardapio':dataCardapio},broadcast=emitirBroadcast)
 
@@ -2128,6 +2144,7 @@ def getPromotions(emitirBroadcast):
     print('entrou getPromotions')
     dados = db.execute('SELECT * FROM promotions')
     emit('promotionsData',dados,broadcast=emitirBroadcast)
+    
 
 
 @socketio.on('invocar_atendente')

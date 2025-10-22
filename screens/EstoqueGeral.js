@@ -6,18 +6,17 @@ import {
   TouchableOpacity,
   Text,
   StyleSheet,
-  Button,
   TextInput,
   RefreshControl,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Switch
+  Switch,
 } from 'react-native';
 import { UserContext } from '../UserContext';
 import { getSocket } from '../socket';
 
-// ---------- Componente de Linha (Memo) ----------
+// ---------- Row (memo) ----------
 const EstoqueRow = React.memo(function EstoqueRow({
   item,
   index,
@@ -28,14 +27,22 @@ const EstoqueRow = React.memo(function EstoqueRow({
   onChangeQty,
 }) {
   return (
-    <TouchableOpacity activeOpacity={0.8} onPress={() => editing && onPressRow(item, index)}>
+    <TouchableOpacity
+      activeOpacity={editing ? 0.8 : 1}
+      onPress={() => editing && onPressRow(item, index)}
+    >
       <View style={styles.tableRow}>
-        <Text style={styles.itemText}>{item.item}</Text>
+        <Text style={styles.itemText} numberOfLines={1}>
+          {item.item}
+        </Text>
 
         <View style={styles.valueColumn}>
           {editing ? (
             <View style={styles.editRow}>
-              <Button title="-" onPress={() => onDec(index)} />
+              <TouchableOpacity style={[styles.stepBtn, styles.stepMinus]} onPress={() => onDec(index)}>
+                <Text style={styles.stepTxt}>-</Text>
+              </TouchableOpacity>
+
               <TextInput
                 style={styles.input}
                 value={String(item.quantidade ?? 0)}
@@ -43,7 +50,10 @@ const EstoqueRow = React.memo(function EstoqueRow({
                 keyboardType="numeric"
                 maxLength={6}
               />
-              <Button title="+" onPress={() => onInc(index)} />
+
+              <TouchableOpacity style={[styles.stepBtn, styles.stepPlus]} onPress={() => onInc(index)}>
+                <Text style={styles.stepTxt}>+</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.valueRowSimples}>
@@ -61,7 +71,6 @@ const EstoqueRow = React.memo(function EstoqueRow({
 }, areEqualRow);
 
 function areEqualRow(prev, next) {
-  // Re-render só quando o item/estado relevante mudar
   return (
     prev.editing === next.editing &&
     prev.index === next.index &&
@@ -71,18 +80,19 @@ function areEqualRow(prev, next) {
   );
 }
 
-// ---------- Tela Principal ----------
+// ---------- Screen ----------
 export default class EstoqueGeral extends React.Component {
   static contextType = UserContext;
 
   constructor(props) {
     super(props);
     this.state = {
-      data: [],                 // lista renderizada (pode ser filtrada)
+      data: [],
       showEditar: false,
       estoque: '',
       refreshing: false,
-      // modal principal de adicionar/editar/remover
+
+      // modal principal (adicionar/editar/remover)
       showAdicionar: true,
       showInputsAdicionar: false,
       showInputsRemover: false,
@@ -92,22 +102,30 @@ export default class EstoqueGeral extends React.Component {
       AdicionarQuantidade: '',
       AdicionarEstoqueIdeal: '',
       titleEnv: '',
+
       showDataFiltrado: false,
+
       // modal de quantidade rápida
       showQtyModal: false,
       selectedItem: null,
       selectedItemIndex: null,
       qtyAction: 'aumentar', // 'aumentar' | 'diminuir'
       qtyDelta: '1',
+
       emAmbos: true,
+
+      // locks anti cliques/duplicidades
+      sending: false,
     };
 
-    // dados completos (fonte da verdade) fora do state p/ reduzir diffs
-    this.dataAll = [];
-    // itens alterados em Map para O(1)
+    this.dataAll = []; // fonte da verdade
     this.itensAlteradosMap = new Map();
 
-    // bind handlers estáveis
+    this.refreshTimeout = null;
+    this.buscaDebounce = null;
+    this._mounted = false;
+
+    // binds
     this.refreshData = this.refreshData.bind(this);
     this.renderItem = this.renderItem.bind(this);
     this.openQtyModal = this.openQtyModal.bind(this);
@@ -124,12 +142,16 @@ export default class EstoqueGeral extends React.Component {
   }
 
   componentDidMount() {
+    this._mounted = true;
     this.socket = getSocket();
+
+    // listeners estáveis
     this.socket.on('respostaEstoqueGeral', this.handleRespostaEstoqueGeral);
     this.refreshData();
   }
 
   componentWillUnmount() {
+    this._mounted = false;
     if (this.socket) {
       this.socket.off('respostaEstoqueGeral', this.handleRespostaEstoqueGeral);
     }
@@ -137,113 +159,102 @@ export default class EstoqueGeral extends React.Component {
     if (this.buscaDebounce) clearTimeout(this.buscaDebounce);
   }
 
+  // ---------- socket handler ----------
   handleRespostaEstoqueGeral = (payload) => {
     const lista = payload?.dataEstoqueGeral ?? [];
-    // mantém dataAll como fonte da verdade
     this.dataAll = Array.isArray(lista) ? lista.slice() : [];
+    if (!this._mounted) return;
     this.setState({ data: this.dataAll, refreshing: false });
-    // limpa alterações pendentes (nova carga)
     this.itensAlteradosMap.clear();
   };
 
-  // ---------- Busca com debounce e sempre minúscula ----------
+  // ---------- utils ----------
   normalize = (s) =>
-  String(s || '')
-    .toLowerCase()
-    .normalize('NFD')         // remove acentos
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
+    String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
 
-// SUBSTITUA seu onChangeBusca por este:
-onChangeBusca(text) {
-  const raw = String(text || '');
-  const q = this.normalize(raw);
+  // ---------- busca com debounce ----------
+  onChangeBusca(text) {
+    const raw = String(text || '');
+    const q = this.normalize(raw);
+    this.setState({ estoque: raw });
 
-  this.setState({ estoque: raw }); // mantém o que o usuário digitou
+    if (this.buscaDebounce) clearTimeout(this.buscaDebounce);
+    this.buscaDebounce = setTimeout(() => {
+      const base = Array.isArray(this.dataAll) ? this.dataAll : [];
+      if (!q) {
+        if (this._mounted) this.setState({ data: base });
+        return;
+      }
 
-  if (this.buscaDebounce) clearTimeout(this.buscaDebounce);
-  this.buscaDebounce = setTimeout(() => {
-    const base = Array.isArray(this.dataAll) ? this.dataAll : [];
+      const words = q.split(/\s+/).filter(Boolean);
+      const starts = [];
+      const allWords = [];
+      const includes = [];
 
-    // vazio → retorna tudo
-    if (!q) {
-      this.setState({ data: base });
-      return;
-    }
+      for (let i = 0; i < base.length; i++) {
+        const it = base[i];
+        const name = this.normalize(it?.item);
+        if (!name) continue;
 
-    const words = q.split(/\s+/).filter(Boolean);
+        let matched = false;
+        for (const w of words) {
+          if (name.startsWith(w)) {
+            starts.push(it);
+            matched = true;
+            break;
+          }
+        }
+        if (matched) continue;
 
-    const starts = [];
-    const allWords = [];
-    const includes = [];
+        if (words.length > 1 && words.every((w) => name.includes(w))) {
+          allWords.push(it);
+          continue;
+        }
 
-    for (let i = 0; i < base.length; i++) {
-      const it = base[i];
-      const name = this.normalize(it?.item);
-
-      if (!name) continue;
-
-      // começa com QUALQUER palavra
-      let matched = false;
-      for (const w of words) {
-        if (name.startsWith(w)) {
-          starts.push(it);
-          matched = true;
-          break;
+        for (const w of words) {
+          if (name.includes(w)) {
+            includes.push(it);
+            break;
+          }
         }
       }
-      if (matched) continue;
 
-      // contém TODAS as palavras (se houver > 1)
-      if (words.length > 1 && words.every((w) => name.includes(w))) {
-        allWords.push(it);
-        continue;
-      }
-
-      // contém QUALQUER palavra
-      for (const w of words) {
-        if (name.includes(w)) {
-          includes.push(it);
-          break;
+      const seen = new Set();
+      const ranked = [];
+      for (const bucket of [starts, allWords, includes]) {
+        for (const it of bucket) {
+          const key = it?.item ?? it;
+          if (!seen.has(key)) {
+            seen.add(key);
+            ranked.push(it);
+          }
         }
       }
-    }
 
-    // concatena por prioridade e remove duplicatas preservando a ordem
-    const seen = new Set();
-    const ranked = [];
-    for (const bucket of [starts, allWords, includes]) {
-      for (const it of bucket) {
-        const key = it?.item ?? it; // use o identificador estável do item (ex.: id) se tiver
-        if (!seen.has(key)) {
-          seen.add(key);
-          ranked.push(it);
-        }
-      }
-    }
+      if (this._mounted) this.setState({ data: ranked });
+    }, 150);
+  }
 
-    this.setState({ data: ranked });
-  }, 150);
-}
-
-
-  // ---------- Atualizações cirúrgicas ----------
+  // ---------- update cirúrgico ----------
   updateItemByIndex(updater, idx) {
     this.setState((prev) => {
       const arr = prev.data.slice();
-      const safeIdx = idx;
-      const oldItem = arr[safeIdx];
+      const oldItem = arr[idx];
       if (!oldItem) return null;
 
       const updated = updater(oldItem);
-      arr[safeIdx] = updated;
+      arr[idx] = updated;
 
-      // espelha em dataAll também (p/ manter coerência ao filtrar)
+      // espelha em dataAll
       const key = oldItem.item;
       const posAll = this.dataAll.findIndex((x) => x.item === key);
       if (posAll >= 0) this.dataAll[posAll] = updated;
 
-      // marca alterado no Map
+      // marca alterado
       this.itensAlteradosMap.set(updated.item, updated);
 
       return { data: arr };
@@ -270,7 +281,7 @@ onChangeBusca(text) {
     this.updateItemByIndex((old) => ({ ...old, quantidade: String(qty) }), index);
   }
 
-  // ---------- Modal de quantidade rápida ----------
+  // ---------- modal qty rápida ----------
   openQtyModal(item, index) {
     this.setState({
       showQtyModal: true,
@@ -303,38 +314,84 @@ onChangeBusca(text) {
       return { ...old, quantidade: String(novo) };
     }, selectedItemIndex);
 
-    this.setState({
-      showQtyModal: false,
-      selectedItem: null,
-      selectedItemIndex: null,
-      qtyAction: 'aumentar',
-      qtyDelta: '1',
+    this.cancelQtyModal();
+  }
+
+  // ---------- refresh ----------
+  refreshData() {
+    if (this.state.refreshing) return; // anti-spam
+    this.setState({ refreshing: true }, () => {
+      this.socket?.emit('getEstoqueGeral', false);
+      if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+      this.refreshTimeout = setTimeout(() => this._mounted && this.setState({ refreshing: false }), 10000);
     });
   }
 
-  // ---------- Envio ao backend ----------
-  handleConfirmar() {
-    const { user } = this.context;
-    const itensAlterados = Array.from(this.itensAlteradosMap.values());
-    this.socket.emit('atualizar_estoque_geral', {
-      itensAlterados,
-      username: user.username,
-      token: user.token,
+  // ---------- filtro metade do ideal ----------
+  filtrar(flag) {
+    const ativar = flag === 'filtrar';
+    this.setState(
+      (prev) => ({ showDataFiltrado: !prev.showDataFiltrado }),
+      () => {
+        if (ativar) {
+          const half = this.dataAll.filter(
+            (it) => (parseInt(it.quantidade) || 0) < (parseInt(it.estoque_ideal) || 0) * 0.5
+          );
+          this.setState({ data: half });
+        } else {
+          this.setState({ data: this.dataAll });
+        }
+      }
+    );
+  }
+
+  // ---------- envio ao backend (locks + timeout) ----------
+  sendWithLock = (fn) => {
+    if (this.state.sending) return;
+    this.setState({ sending: true }, () => {
+      try {
+        fn();
+      } finally {
+        // libera lock mesmo sem ack
+        setTimeout(() => this._mounted && this.setState({ sending: false }), 6000);
+      }
     });
-    this.setState({ showEditar: false });
-    this.itensAlteradosMap.clear();
+  };
+
+  handleConfirmar() {
+    const { user } = this.context || {};
+    const itensAlterados = Array.from(this.itensAlteradosMap.values());
+    if (itensAlterados.length === 0) {
+      Alert.alert('Nada para enviar', 'Nenhum item foi alterado.');
+      return;
+    }
+    this.sendWithLock(() => {
+      this.socket?.emit('atualizar_estoque_geral', {
+        itensAlterados,
+        username: user?.username,
+        token: user?.token,
+      });
+      this.setState({ showEditar: false });
+      this.itensAlteradosMap.clear();
+    });
   }
 
   handleTransferirEstoqueCarrinho() {
-    const { user } = this.context;
+    const { user } = this.context || {};
     const itensAlterados = Array.from(this.itensAlteradosMap.values());
-    this.socket.emit('transferir_para_estoque_carrinho', {
-      itensAlterados,
-      username: user.username,
-      token: user.token,
+    if (itensAlterados.length === 0) {
+      Alert.alert('Nada para transferir', 'Nenhum item foi alterado.');
+      return;
+    }
+    this.sendWithLock(() => {
+      this.socket?.emit('transferir_para_estoque_carrinho', {
+        itensAlterados,
+        username: user?.username,
+        token: user?.token,
+      });
+      this.setState({ showEditar: false });
+      this.itensAlteradosMap.clear();
     });
-    this.setState({ showEditar: false });
-    this.itensAlteradosMap.clear();
   }
 
   alertConfirmar = () => {
@@ -349,28 +406,7 @@ onChangeBusca(text) {
     );
   };
 
-  refreshData() {
-    this.setState({ refreshing: true }, () => {
-      this.socket.emit('getEstoqueGeral', false);
-      if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
-      this.refreshTimeout = setTimeout(() => this.setState({ refreshing: false }), 10000);
-    });
-  }
-
-  filtrar(flag) {
-    const ativar = flag === 'filtrar';
-    this.setState((prev) => ({ showDataFiltrado: !prev.showDataFiltrado }), () => {
-      if (ativar) {
-        const half = this.dataAll.filter(
-          (it) => (parseInt(it.quantidade) || 0) < (parseInt(it.estoque_ideal) || 0) * 0.5
-        );
-        this.setState({ data: half });
-      } else {
-        this.setState({ data: this.dataAll });
-      }
-    });
-  }
-  // ---------- Inputs do modal principal (lowercase p/ texto) ----------
+  // ---------- modal principal (lowercase p/ texto) ----------
   emitEditar() {
     const {
       titleEnv,
@@ -378,35 +414,38 @@ onChangeBusca(text) {
       AdicionarNovoNome,
       AdicionarQuantidade,
       AdicionarEstoqueIdeal,
+      emAmbos,
     } = this.state;
-    const { user } = this.context;
+    const { user } = this.context || {};
 
     if (!AdicionarItem) {
-      Alert.alert('Item não identificado');
+      Alert.alert('Item não identificado', 'Informe o nome do item.');
       return;
     }
 
-    this.socket.emit('EditingEstoque', {
-      item: (AdicionarItem || '').toLowerCase(),
-      novoNome: (AdicionarNovoNome || '').toLowerCase(),
-      quantidade: AdicionarQuantidade, // numérico: não altera
-      estoqueIdeal: AdicionarEstoqueIdeal, // numérico: não altera
-      tipo: titleEnv,
-      estoque: 'estoque_geral',
-      username: user.username,
-      token: user.token,
-      mudar_os_dois: this.state.emAmbos,
-    });
+    this.sendWithLock(() => {
+      this.socket?.emit('EditingEstoque', {
+        item: (AdicionarItem || '').toLowerCase(),
+        novoNome: (AdicionarNovoNome || '').toLowerCase(),
+        quantidade: AdicionarQuantidade,
+        estoqueIdeal: AdicionarEstoqueIdeal,
+        tipo: titleEnv, // 'Adicionar' | 'Editar' | 'Remover'
+        estoque: 'estoque_geral',
+        username: user?.username,
+        token: user?.token,
+        mudar_os_dois: emAmbos,
+      });
 
-    this.setState({
-      AdicionarEstoqueIdeal: '',
-      AdicionarNovoNome: '',
-      AdicionarQuantidade: '',
-      AdicionarItem: '',
+      this.setState({
+        AdicionarEstoqueIdeal: '',
+        AdicionarNovoNome: '',
+        AdicionarQuantidade: '',
+        AdicionarItem: '',
+      });
     });
   }
 
-  // ---------- Render ----------
+  // ---------- render ----------
   renderItem({ item, index }) {
     return (
       <EstoqueRow
@@ -428,31 +467,29 @@ onChangeBusca(text) {
       showInputsAdicionar,
       showInputEditar,
       showInputsRemover,
-      titleEnv,
       estoque,
+      sending,
     } = this.state;
 
-    // configura inputs do modal principal
+    // inputs e título do modal principal
     let inputs = [];
     let titleEnviar = '';
     if (showInputsAdicionar) {
       inputs = [
         { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
         { key: 'quantidade', label: 'Quantidade', nome: 'AdicionarQuantidade', tipoTeclado: 'numeric', isText: false },
-        { key: 'Estoque Ideal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+        { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
       ];
       titleEnviar = 'Adicionar';
     } else if (showInputEditar) {
       inputs = [
         { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
-        { key: 'Novo nome', label: 'Novo Nome do Item', nome: 'AdicionarNovoNome', tipoTeclado: 'default', isText: true },
-        { key: 'Estoque Ideal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+        { key: 'novo', label: 'Novo Nome do Item', nome: 'AdicionarNovoNome', tipoTeclado: 'default', isText: true },
+        { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
       ];
       titleEnviar = 'Editar';
     } else if (showInputsRemover) {
-      inputs = [
-        { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
-      ];
+      inputs = [{ key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true }];
       titleEnviar = 'Remover';
     }
 
@@ -462,6 +499,7 @@ onChangeBusca(text) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
       >
+        {/* Header */}
         <View style={styles.tableHeader}>
           <View style={styles.headerSearchBox}>
             <TextInput
@@ -470,6 +508,7 @@ onChangeBusca(text) {
               placeholderTextColor="#999"
               onChangeText={this.onChangeBusca}
               value={estoque}
+              returnKeyType="search"
             />
           </View>
 
@@ -483,40 +522,56 @@ onChangeBusca(text) {
           </TouchableOpacity>
 
           {!this.state.showEditar ? (
-            <TouchableOpacity style={styles.actionBtn} onPress={() => this.setState({ showEditar: true })}>
-              <Text style={styles.actionBtnText}>Editar</Text>
+            <TouchableOpacity
+              style={[styles.actionBtn, sending && styles.btnDisabled]}
+              onPress={() => !sending && this.setState({ showEditar: true })}
+              disabled={sending}
+            >
+              <Text style={styles.actionBtnText}>{sending ? 'Aguarde…' : 'Editar'}</Text>
             </TouchableOpacity>
           ) : (
             <View style={styles.actionButtons}>
               <TouchableOpacity
-                style={[styles.actionBtn, styles.actionBtnCancel]}
+                style={[styles.actionBtn, styles.actionBtnCancel, sending && styles.btnDisabled]}
                 onPress={() =>
-                  this.setState({ /* data volta da fonte */ data: this.dataAll, showEditar: false }, () => {
+                  !sending &&
+                  this.setState({ data: this.dataAll, showEditar: false }, () => {
                     this.itensAlteradosMap.clear();
                     this.refreshData();
                   })
                 }
+                disabled={sending}
               >
                 <Text style={styles.actionBtnText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionBtnConfirm]} onPress={this.alertConfirmar}>
-                <Text style={styles.actionBtnText}>Confirmar</Text>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnConfirm, sending && styles.btnDisabled]}
+                onPress={() => !sending && this.alertConfirmar()}
+                disabled={sending}
+              >
+                <Text style={styles.actionBtnText}>{sending ? 'Enviando…' : 'Confirmar'}</Text>
               </TouchableOpacity>
             </View>
           )}
         </View>
 
+        {/* Lista */}
         <View style={{ flex: 1, marginBottom: 80 }}>
           <FlatList
             data={this.state.data}
             keyExtractor={(it, idx) => String(it.item || idx)}
             renderItem={this.renderItem}
-            extraData={{ editing: this.state.showEditar }} // re-render só quando muda modo
+            extraData={{ editing: this.state.showEditar }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />}
             windowSize={7}
             maxToRenderPerBatch={14}
             initialNumToRender={12}
             removeClippedSubviews
+            ListEmptyComponent={
+              !refreshing ? (
+                <Text style={{ textAlign: 'center', color: '#667' }}>Nenhum item encontrado.</Text>
+              ) : null
+            }
           />
         </View>
 
@@ -554,51 +609,74 @@ onChangeBusca(text) {
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.ModalTitulo}>{titleEnviar} Estoque Geral</Text>
+                <Text style={styles.ModalTitulo}>{titleEnviar || 'Gerenciar'} Estoque Geral</Text>
               </View>
             </View>
 
             {!showInputsAdicionar && !showInputEditar && !showInputsRemover ? (
               <View style={styles.ButtonsCardapio}>
-                <Button title="Adicionar" onPress={() => this.setState({ showInputsAdicionar: true })} />
-                <Button title="Editar" onPress={() => this.setState({ showInputEditar: true })} />
-                <Button title="Remover" onPress={() => this.setState({ showInputsRemover: true })} />
+                <TouchableOpacity
+                  style={[styles.actionBtn, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputsAdicionar: true, titleEnv: 'Adicionar' })}
+                >
+                  <Text style={styles.actionBtnText}>Adicionar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputEditar: true, titleEnv: 'Editar' })}
+                >
+                  <Text style={styles.actionBtnText}>Editar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionBtnCancel, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputsRemover: true, titleEnv: 'Remover' })}
+                >
+                  <Text style={styles.actionBtnText}>Remover</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <FlatList
-                data={inputs}
+                data={(() => {
+                  if (showInputsAdicionar) return [
+                    { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
+                    { key: 'quantidade', label: 'Quantidade', nome: 'AdicionarQuantidade', tipoTeclado: 'numeric', isText: false },
+                    { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+                  ];
+                  if (showInputEditar) return [
+                    { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
+                    { key: 'novo', label: 'Novo Nome do Item', nome: 'AdicionarNovoNome', tipoTeclado: 'default', isText: true },
+                    { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+                  ];
+                  return [{ key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true }];
+                })()}
                 keyExtractor={(it) => it.key}
-                ListFooterComponent={<View style={{ height: 20 }} />}
+                contentContainerStyle={{ paddingBottom: 16 }}
                 renderItem={({ item }) => {
                   const value = this.state[item.nome];
-                
                   const onChange = (text) => {
                     const raw = String(text || '');
-                    const lowerOrRaw = item.isText ? raw.toLowerCase() : raw; // mantém minúsculo p/ texto
+                    const lowerOrRaw = item.isText ? raw.toLowerCase() : raw;
                     this.setState({ [item.nome]: lowerOrRaw });
-                
-                    // auto-sugestão inteligente para AdicionarItem no editar/remover
+
+                    // sugestão inteligente apenas quando Editar/Remover
                     if (item.nome === 'AdicionarItem' && (showInputEditar || showInputsRemover)) {
                       const q = this.normalize(lowerOrRaw);
-                
                       if (!q) {
                         this.setState({ dataGeralAlterarSug: [] });
                         return;
                       }
-                
                       const base = Array.isArray(this.dataAll) ? this.dataAll : [];
                       const words = q.split(/\s+/).filter(Boolean);
-                
+
                       const starts = [];
                       const allWords = [];
                       const includes = [];
-                
+
                       for (let i = 0; i < base.length; i++) {
                         const it = base[i];
                         const name = this.normalize(it?.item);
                         if (!name) continue;
-                
-                        // começa com QUALQUER palavra
+
                         let matched = false;
                         for (const w of words) {
                           if (name.startsWith(w)) {
@@ -608,14 +686,12 @@ onChangeBusca(text) {
                           }
                         }
                         if (matched) continue;
-                
-                        // contém TODAS as palavras (se houver >1)
+
                         if (words.length > 1 && words.every((w) => name.includes(w))) {
                           allWords.push(it);
                           continue;
                         }
-                
-                        // contém QUALQUER palavra
+
                         for (const w of words) {
                           if (name.includes(w)) {
                             includes.push(it);
@@ -623,20 +699,19 @@ onChangeBusca(text) {
                           }
                         }
                       }
-                
-                      // junta por prioridade, removendo duplicados e limitando a 50
+
                       const seen = new Set();
                       const ranked = [];
                       for (const bucket of [starts, allWords, includes]) {
                         for (const it of bucket) {
-                          const key = it?.item ?? it; // se tiver id estável, use it.id aqui
+                          const key = it?.item ?? it;
                           if (!seen.has(key)) {
                             seen.add(key);
                             ranked.push(it);
                           }
                         }
                       }
-                
+
                       this.setState({ dataGeralAlterarSug: ranked.slice(0, 50) });
                     }
                   };
@@ -658,7 +733,13 @@ onChangeBusca(text) {
                         this.state.AdicionarItem &&
                         !this.state.AdicionarEstoqueIdeal && (
                           <FlatList
-                            style={{ maxHeight: 180, marginTop: 8, borderWidth: 1, borderColor: '#ddd', borderRadius: 6 }}
+                            style={{
+                              maxHeight: 180,
+                              marginTop: 8,
+                              borderWidth: 1,
+                              borderColor: '#ddd',
+                              borderRadius: 6,
+                            }}
                             data={this.state.dataGeralAlterarSug || []}
                             keyExtractor={(sug, i) => String(sug.item || i)}
                             keyboardShouldPersistTaps="handled"
@@ -681,49 +762,58 @@ onChangeBusca(text) {
                                 <Text>{sug.item}</Text>
                               </TouchableOpacity>
                             )}
-                            
                           />
                         )}
                     </View>
                   );
                 }}
               />
-              
             )}
-            {(showInputsAdicionar || showInputEditar || showInputsRemover) && (
-  <>
-    <View style={styles.ambosFooter}>
-  <View style={styles.ambosRow}>
-    <Switch
-      value={this.state.emAmbos}
-      onValueChange={(v)=>this.setState({ emAmbos: v })}
-    />
-    <Text style={styles.ambosLabel}>{`${titleEnviar} em ambos estoque`}</Text>
-  </View>
-</View>
-  </>
-)}
 
             {(showInputsAdicionar || showInputEditar || showInputsRemover) && (
-              <TouchableOpacity
-                style={styles.botaoEnviar}
-                onPress={() => this.setState({ titleEnv: titleEnviar }, this.emitEditar)}
-              >
-                <Text style={styles.textoBotaoEnviar}>{titleEnviar}</Text>
-              </TouchableOpacity>
+              <>
+                <View style={styles.ambosFooter}>
+                  <View style={styles.ambosRow}>
+                    <Switch
+                      value={this.state.emAmbos}
+                      onValueChange={(v) => this.setState({ emAmbos: v })}
+                    />
+                    <Text style={styles.ambosLabel}>
+                      {(this.state.titleEnv || titleEnviar || 'Ação') + ' em ambos estoque'}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.botaoEnviar, sending && styles.btnDisabled]}
+                  onPress={() => !sending && this.setState({ titleEnv: titleEnviar }, this.emitEditar)}
+                  disabled={sending}
+                >
+                  <Text style={styles.textoBotaoEnviar}>
+                    {sending ? 'Enviando…' : titleEnviar}
+                  </Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         </Modal>
 
         {/* Modal de quantidade rápida */}
-        <Modal visible={this.state.showQtyModal} transparent animationType="slide" onRequestClose={this.cancelQtyModal}>
+        <Modal
+          visible={this.state.showQtyModal}
+          transparent
+          animationType="slide"
+          onRequestClose={this.cancelQtyModal}
+        >
           <View style={styles.qtyModalOverlay}>
             <View style={styles.qtyModalBox}>
-              <Text style={styles.qtyModalTitle}>{this.state.selectedItem?.item ?? 'Item'}</Text>
+              <Text style={styles.qtyModalTitle}>
+                {this.state.selectedItem?.item ?? 'Item'}
+              </Text>
 
               <View style={{ marginBottom: 10 }}>
                 <Text style={styles.qtyInfoText}>
-                  Atual: {this.state.selectedItem?.quantidade}{' '}
+                  Atual: {this.state.selectedItem?.quantidade}
                   {this.state.selectedItem?.estoque_ideal != null
                     ? `   |   Ideal: ${this.state.selectedItem?.estoque_ideal}`
                     : ''}
@@ -732,22 +822,34 @@ onChangeBusca(text) {
 
               <View style={styles.qtyToggleRow}>
                 <TouchableOpacity
-                  style={[styles.qtyToggleBtn, this.state.qtyAction === 'aumentar' && styles.qtyToggleBtnActive]}
+                  style={[
+                    styles.qtyToggleBtn,
+                    this.state.qtyAction === 'aumentar' && styles.qtyToggleBtnActive,
+                  ]}
                   onPress={() => this.setState({ qtyAction: 'aumentar' })}
                 >
                   <Text
-                    style={[styles.qtyToggleText, this.state.qtyAction === 'aumentar' && styles.qtyToggleTextActive]}
+                    style={[
+                      styles.qtyToggleText,
+                      this.state.qtyAction === 'aumentar' && styles.qtyToggleTextActive,
+                    ]}
                   >
                     Aumentar
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.qtyToggleBtn, this.state.qtyAction === 'diminuir' && styles.qtyToggleBtnActive]}
+                  style={[
+                    styles.qtyToggleBtn,
+                    this.state.qtyAction === 'diminuir' && styles.qtyToggleBtnActive,
+                  ]}
                   onPress={() => this.setState({ qtyAction: 'diminuir' })}
                 >
                   <Text
-                    style={[styles.qtyToggleText, this.state.qtyAction === 'diminuir' && styles.qtyToggleTextActive]}
+                    style={[
+                      styles.qtyToggleText,
+                      this.state.qtyAction === 'diminuir' && styles.qtyToggleTextActive,
+                    ]}
                   >
                     Diminuir
                   </Text>
@@ -779,8 +881,14 @@ onChangeBusca(text) {
           </View>
         </Modal>
 
+        {/* FAB */}
         {showAdicionar && (
-          <TouchableOpacity style={styles.buttonAdicionar} onPress={() => this.setState({ showAdicionar: false })}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[styles.buttonAdicionar, sending && styles.btnDisabled]}
+            onPress={() => !sending && this.setState({ showAdicionar: false })}
+            disabled={sending}
+          >
             <Text style={styles.buttonTexto}>+</Text>
           </TouchableOpacity>
         )}
@@ -789,13 +897,12 @@ onChangeBusca(text) {
   }
 }
 
-// -------------------- ESTILOS --------------------
+// ---------- styles ----------
 const styles = StyleSheet.create({
-  valueColumn: { flex: 1.2, alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
-  valueRowSimples: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 14 },
-
+  // layout base
   container: { flex: 1, padding: 16, backgroundColor: '#f7fafc', marginBlockEnd: 50 },
 
+  // header
   tableHeader: {
     backgroundColor: '#17315c',
     borderRadius: 14,
@@ -812,7 +919,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 6,
   },
-
   headerSearchBox: { flex: 2.2, marginHorizontal: 5 },
   inputEstoque: {
     height: 38,
@@ -825,16 +931,31 @@ const styles = StyleSheet.create({
     marginVertical: 2,
     minWidth: 85,
   },
-
-  filterButton: { backgroundColor: '#ffc43d', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 7, elevation: 1, marginHorizontal: 2 },
+  filterButton: {
+    backgroundColor: '#ffc43d',
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 7,
+    elevation: 1,
+    marginHorizontal: 2,
+  },
   filterButtonText: { fontWeight: 'bold', color: '#573400', fontSize: 13, letterSpacing: 0.7 },
 
   actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 3 },
-  actionBtn: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 7, marginLeft: 4, backgroundColor: '#35a7ff', elevation: 1 },
+  actionBtn: {
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 7,
+    marginLeft: 4,
+    backgroundColor: '#35a7ff',
+    elevation: 1,
+  },
   actionBtnCancel: { backgroundColor: '#e34242' },
   actionBtnConfirm: { backgroundColor: '#3bb273' },
   actionBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 12.5, letterSpacing: 0.5 },
+  btnDisabled: { opacity: 0.6 },
 
+  // tabela/linhas
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -850,10 +971,19 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   itemText: { flex: 2, fontSize: 17, fontWeight: '600', color: '#34445d', marginRight: 8 },
+  valueColumn: { flex: 1.2, alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
+  valueRowSimples: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 14 },
 
-  quantidade: { width: 40, fontSize: 18, fontWeight: '700', color: 'blue', textAlign: 'center', marginHorizontal: 8 },
+  quantidade: {
+    width: 40,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1f5eff',
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
   estoque_ideal: { width: 40, fontSize: 18, fontWeight: '600', textAlign: 'center', marginHorizontal: 8, color: '#34445d' },
-  diffEstoque: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', color: 'green', marginHorizontal: 8 },
+  diffEstoque: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', color: '#10B981', marginHorizontal: 8 },
 
   editRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
   input: {
@@ -868,11 +998,38 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
 
-  // Modal principal
+  stepBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  stepMinus: { backgroundColor: '#ef4444' },
+  stepPlus: { backgroundColor: '#17315c' },
+  stepTxt: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
+  // modal principal
+  ModalContainer: {
+    backgroundColor: 'white',
+    marginVertical: 60,
+    marginHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: 'black',
+    flex: 1,
+  },
   ModalHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#ccc' },
+  setaVoltar: { left: 10, marginRight: 20 },
   setaTexto: { fontSize: 30, color: '#333' },
   ModalTitulo: { fontSize: 22, fontWeight: 'bold', marginLeft: 16 },
-  ButtonsCardapio: { padding: 20, justifyContent: 'space-around', height: 200 },
+
+  ButtonsCardapio: {
+    padding: 20,
+    justifyContent: 'space-around',
+    height: 200,
+  },
 
   inputGroup: { paddingHorizontal: 20, paddingVertical: 10 },
   inputLabel: { fontSize: 14, marginBottom: 4 },
@@ -889,79 +1046,45 @@ const styles = StyleSheet.create({
   },
   textoBotaoEnviar: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
-  setaVoltar: { left: 10, marginRight: 20 },
-  ModalContainer: {
-    backgroundColor: 'white',
-    marginVertical: 60,
-    marginHorizontal: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: 'black',
-    flex: 1,
-
+  // FAB
+  buttonAdicionar: {
+    position: 'absolute',
+    width: 57,
+    height: 57,
+    bottom: 20,
+    right: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
+    borderRadius: 100,
+    elevation: 3,
   },
+  buttonTexto: { fontSize: 40, paddingBottom: 4.2, color: 'white', fontWeight: '800' },
 
-  // Botão flutuante
-  buttonAdicionar: { position: 'absolute', width: 57, height: 57, bottom: 20, right: 20, alignItems: 'center', backgroundColor: 'black', borderRadius: 100 },
-  buttonTexto: { fontSize: 40, fontWeight: 'Arial', paddingBottom: 4.2, color: 'white' },
-
-  // Modal de quantidade rápida
+  // modal qty rápida
   qtyModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   qtyModalBox: { width: '88%', backgroundColor: '#fff', borderRadius: 12, padding: 16 },
   qtyModalTitle: { fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 12, color: '#222' },
   qtyInfoText: { textAlign: 'center', color: '#444' },
+
   qtyToggleRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
   qtyToggleBtn: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
   qtyToggleBtnActive: { backgroundColor: '#17315c', borderColor: '#17315c' },
   qtyToggleText: { color: '#333', fontWeight: '600' },
   qtyToggleTextActive: { color: '#fff' },
+
   qtyInputRow: { flexDirection: 'row', alignItems: 'center', marginTop: 14 },
   qtyInputLabel: { width: 100, fontSize: 15, color: '#333' },
   qtyInput: { flex: 1, height: 42, borderWidth: 1, borderColor: '#bbb', borderRadius: 8, paddingHorizontal: 10, backgroundColor: '#f7fafd', fontSize: 16 },
+
   qtyActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 18 },
   qtyBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginHorizontal: 4 },
   qtyBtnCancel: { backgroundColor: '#6c757d' },
   qtyBtnOk: { backgroundColor: '#3bb273' },
   qtyBtnText: { color: '#fff', fontWeight: '700' },
-  ambosFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 8,    // encosta nos inputs
-    paddingBottom: 6,
-  },
-  
-  ambosRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: '#9aa3b2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  
-  checkboxChecked: {
-    borderColor: '#17315c',
-    backgroundColor: '#17315c',
-  },
-  
-  checkboxDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    backgroundColor: '#fff',
-  },
-  
-  ambosLabel: {
-    fontSize: 14.5,
-    color: '#2c3a4b',
-    fontWeight: '600',
-    textTransform: 'capitalize',
-  },
+
+  // “ambos” (estoques)
+  ambosFooter: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 6 },
+  ambosRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  ambosLabel: { fontSize: 14.5, color: '#2c3a4b', fontWeight: '600', textTransform: 'capitalize' },
 });

@@ -1,26 +1,24 @@
+// Cozinha.js
 import React from 'react';
 import {
   View,
   FlatList,
   Text,
   StyleSheet,
-  Button,
   RefreshControl,
   TouchableOpacity,
 } from 'react-native';
 import { UserContext } from '../UserContext';
 import { getSocket } from '../socket';
+import { PrinterService } from '../PrinterService';
+import { API_URL } from './url';
 
-// =============== Helpers ===============
-const formatBRL = (n) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-    .format(Number(n || 0));
-
+// -------------------- helpers --------------------
 const safeParseOptions = (raw) => {
   if (!raw) return [];
   try {
     return Array.isArray(raw) ? raw : JSON.parse(raw);
-  } catch (_e) {
+  } catch {
     try {
       return JSON.parse(String(raw).replace(/'/g, '"'));
     } catch {
@@ -33,18 +31,15 @@ const safeParseOptions = (raw) => {
 const formatSelectedOptions = (rawOpcoes) => {
   const groups = safeParseOptions(rawOpcoes);
   if (!Array.isArray(groups) || groups.length === 0) return '';
-
   const lines = [];
   for (const g of groups) {
-    const all = (g?.options || g?.opcoes || []);
+    const all = g?.options || g?.opcoes || [];
     const opts = all.filter(
       (o) => o?.selecionado === true || typeof o?.selecionado === 'undefined'
     );
-    if (opts.length === 0) continue;
-
-    const optsTxt = opts.map((o) => o?.nome).join(', ');
+    if (!opts.length) continue;
     const groupName = g?.nome || 'Opções';
-    lines.push(`${groupName}: ${optsTxt}`);
+    lines.push(`${groupName}: ${opts.map((o) => o?.nome).join(', ')}`);
   }
   return lines.join(' | ');
 };
@@ -58,14 +53,18 @@ const formatHoraCurta = (s) => {
 const estadoStyle = (estado) => {
   switch ((estado || '').toLowerCase()) {
     case 'em preparo':
-      return { bg: '#FFF3E0', fg: '#EF6C00' }; // laranja suave
+      return { bg: '#FFF3E0', fg: '#EF6C00' };
     case 'pronto':
-      return { bg: '#E8F5E9', fg: '#2E7D32' }; // verde suave
+      return { bg: '#E8F5E9', fg: '#2E7D32' };
     default:
-      return { bg: '#E3F2FD', fg: '#1565C0' }; // azul suave
+      return { bg: '#E3F2FD', fg: '#1565C0' };
   }
 };
-// =======================================
+
+const isCozinhaCategory = (obj) =>
+  obj?.categoria === '3' || obj?.categoria_id === 3;
+
+// -------------------------------------------------
 
 export default class Cozinha extends React.Component {
   static contextType = UserContext;
@@ -75,33 +74,129 @@ export default class Cozinha extends React.Component {
     this.state = {
       data: [],
       data_filtrado: [],
-      showFiltrado: false,
+      showFiltrado: false, // false = mostra só "não Pronto"
       refreshing: false,
+      pendingIds: {}, // { [idPedido]: true } lock anti-clique
     };
-    this.refreshData = this.refreshData.bind(this);
     this.socket = null;
     this.refreshTimeout = null;
+    this._mounted = false;
   }
 
   componentDidMount() {
+    this._mounted = true;
+    const { user } = this.context || {};
     this.socket = getSocket();
-    this.socket.on('respostaPedidos', this.handleRespostaPedidos);
+
+    // listeners (IDs corretos)
+    this.socket.on('respostaPedidosCC', this.handleRespostaPedidos);
     this.refreshData();
+
+    // impressões pendentes (somente cozinha principal)
+    if (user?.username === 'cozinha_principal') {
+      this.processPendingPrintOrders();
+      this.socket.on('emitir_pedido_cozinha', this.handleEmitirPedidoRestante);
+    }
   }
 
   componentWillUnmount() {
+    this._mounted = false;
     if (this.socket) {
-      this.socket.off('respostaPedidos', this.handleRespostaPedidos);
+      this.socket.off('respostaPedidosCC', this.handleRespostaPedidos);
+      this.socket.off('emitir_pedido_cozinha', this.handleEmitirPedidoRestante);
     }
     if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
   }
 
+  // ----------------- impressão -----------------
+  handleEmitirPedidoRestante = async (order) => {
+    try {
+      if (!isCozinhaCategory(order)) return;
+
+      await PrinterService.printPedido({
+        mesa: order?.mesa ?? order?.comanda ?? '',
+        pedido: order?.pedido || '',
+        quant: order?.quantidade || null,
+        opcoes: order?.opcoes || null,
+        extra: order?.extra || null,
+        hora: order?.hora || null,
+        remetente: order?.remetente || null,
+        endereco: order?.endereco_entrega || null,
+        prazo: order?.prazo || order?.horario_para_entrega || null,
+        sendBy: order?.sendBy || null,
+      });
+
+      await fetch(`${API_URL}/updatePrinted`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pedidoId: order.id }),
+      });
+    } catch (e) {
+      console.log('Erro ao imprimir (cozinha):', e);
+    }
+  };
+
+  /** Busca itens não impressos e imprime somente categoria 3 */
+  processPendingPrintOrders = async () => {
+    try {
+      const resp = await fetch(`${API_URL}/getPendingPrintOrders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printed: 0, ordem: 0 }),
+      });
+
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} :: ${text}`);
+
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error(`Resposta não-JSON do servidor: ${text.slice(0, 300)}`);
+      }
+
+      for (const order of json.pedidos || []) {
+        if (!isCozinhaCategory(order)) continue;
+        try {
+          await PrinterService.printPedido({
+            mesa: order?.mesa ?? order?.comanda ?? '',
+            pedido: order?.pedido || '',
+            quant: order?.quantidade || null,
+            opcoes: order?.opcoes || null,
+            extra: order?.extra || null,
+            hora: order?.hora || null,
+            remetente: order?.remetente || null,
+            endereco: order?.endereco_entrega || null,
+            prazo: order?.prazo || order?.horario_para_entrega || null,
+            sendBy: order?.sendBy || null,
+          });
+
+          const upd = await fetch(`${API_URL}/updatePrinted`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pedidoId: order.id }),
+          });
+          if (!upd.ok) {
+            const errText = await upd.text();
+            console.error(`Falha ao marcar impresso (id=${order.id}): ${upd.status} ${upd.statusText} :: ${errText}`);
+          }
+        } catch (e) {
+          console.log('Erro ao imprimir (cozinha):', e);
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao buscar pedidos pendentes de impressão (cozinha):', error);
+    }
+  };
+
+  // ----------------- socket data -----------------
   handleRespostaPedidos = (dados) => {
+    if (!this._mounted) return;
     if (!dados?.dataPedidos) {
       this.setState({ refreshing: false });
       return;
     }
-    const data_temp = dados.dataPedidos.filter((item) => item.categoria === '3');
+    const data_temp = (dados.dataPedidos || []).filter(isCozinhaCategory);
     const data_temp_filtrado = data_temp.filter((item) => item.estado !== 'Pronto');
 
     this.setState({
@@ -111,45 +206,100 @@ export default class Cozinha extends React.Component {
     });
   };
 
+  // ----------------- refresh -----------------
   refreshData = () => {
+    if (this.state.refreshing) return; // anti-spam
     this.setState({ refreshing: true }, () => {
-      this.socket.emit('getPedidos', false);
+      this.socket?.emit('getPedidosCC', false);
       if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+      // fallback p/ rede instável
       this.refreshTimeout = setTimeout(() => {
-        this.setState({ refreshing: false });
-      }, 5000);
+        if (this._mounted) this.setState({ refreshing: false });
+      }, 8000);
     });
   };
 
-  alterar_estado(id, estado) {
-    this.socket.emit('inserir_preparo', { id, estado });
-  }
+  // ----------------- ações -----------------
+  alterar_estado = (id, estado) => {
+    if (!id) return;
+    // lock anti-cliques rápidos (com auto-release em 7s)
+    if (this.state.pendingIds[id]) return;
+
+    this.setState((prev) => ({ pendingIds: { ...prev.pendingIds, [id]: true } }), () => {
+      this.socket?.emit('inserir_preparo', { id, estado });
+
+      // Solta lock sozinho, mesmo que backend não responda
+      setTimeout(() => {
+        if (!this._mounted) return;
+        this.setState((prev) => {
+          const copy = { ...prev.pendingIds };
+          delete copy[id];
+          return { pendingIds: copy };
+        });
+      }, 7000);
+    });
+  };
 
   filtrar = () => {
     this.setState((prev) => ({ showFiltrado: !prev.showFiltrado }));
+  };
+
+  // ----------------- UI -----------------
+  renderBotaoPreparo = (item, { compact = false } = {}) => {
+    const { user } = this.context || {};
+    if (!(user?.cargo === 'Cozinha' || user?.cargo === 'ADM')) return null;
+
+    const busy = !!this.state.pendingIds[item?.id];
+    const wrapStyle = compact ? styles.startBtnWrapInline : styles.actionsRow;
+
+    const makeBtn = (label, onPress, variant) => (
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.9}
+        disabled={busy}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        style={[
+          styles.startBtn,
+          compact && styles.startBtnCompact,
+          variant === 'blue' && styles.startBtnBlue,
+          variant === 'orange' && styles.startBtnOrange,
+          variant === 'green' && styles.startBtnGreen,
+          busy && { opacity: 0.6 },
+        ]}
+      >
+        <Text style={styles.startBtnText}>{busy ? 'Aguarde…' : label}</Text>
+      </TouchableOpacity>
+    );
+
+    let content = null;
+    if (item?.estado === 'Em Preparo') {
+      content = makeBtn('Pronto', () => this.alterar_estado(item.id, 'Pronto'), 'orange');
+    } else if (item?.estado === 'A Fazer') {
+      content = makeBtn('Começar', () => this.alterar_estado(item.id, 'Em Preparo'), 'blue');
+    } else {
+      content = makeBtn('Desfazer', () => this.alterar_estado(item.id, 'A Fazer'), 'green');
+    }
+
+    return <View style={wrapStyle}>{content}</View>;
   };
 
   renderItem = ({ item }) => {
     const optionsText = formatSelectedOptions(item?.opcoes);
     const { bg, fg } = estadoStyle(item?.estado);
 
-    // extras do banco
     const remetente = item?.remetente;
     const comanda = item?.comanda;
     const endereco = item?.endereco_entrega;
     const horaEntrega = item?.horario_para_entrega;
 
-    // Chip: mostra Remetente e, dentro, a Comanda
     const remHeader =
       remetente || comanda
-        ? `${remetente ? remetente : ''}${
-            comanda ? `${remetente ? ' · ' : ''}Comanda ${comanda}` : ''
-          }`
+        ? `${remetente ? remetente : ''}${comanda ? `${remetente ? ' · ' : ''}Comanda ${comanda}` : ''}`
         : '';
 
     return (
       <View style={styles.card}>
-        {/* Cabeçalho do card (Remetente + Estado) */}
+        {/* Cabeçalho */}
         <View style={styles.cardHeader}>
           {!!remHeader && (
             <View style={styles.pillRemetente}>
@@ -157,19 +307,16 @@ export default class Cozinha extends React.Component {
             </View>
           )}
           <View style={[styles.pillEstado, { backgroundColor: bg }]}>
-            <Text style={[styles.pillEstadoText, { color: fg }]}>
-              {item?.estado || 'A Fazer'}
-            </Text>
+            <Text style={[styles.pillEstadoText, { color: fg }]}>{item?.estado || 'A Fazer'}</Text>
           </View>
         </View>
 
         {/* Pedido */}
         <Text style={styles.pedidoTitle}>{item?.pedido}</Text>
-
         {!!optionsText && <Text style={styles.optionsText}>{optionsText}</Text>}
         {!!item?.extra && <Text style={styles.extraText}>Obs: {item.extra}</Text>}
 
-        {/* Entrega (se houver) */}
+        {/* Entrega */}
         {(endereco || horaEntrega) && (
           <View style={styles.deliveryBox}>
             {!!endereco && (
@@ -178,37 +325,21 @@ export default class Cozinha extends React.Component {
                 {endereco}
               </Text>
             )}
+
             {!!horaEntrega && (
-              <Text style={styles.deliveryLine}>
-                <Text style={styles.deliveryLabel}>Prazo: </Text>
-                {formatHoraCurta(horaEntrega)}
-              </Text>
+              <View style={styles.deliveryInline}>
+                <Text style={styles.deliveryLine}>
+                  <Text style={styles.deliveryLabel}>Prazo: </Text>
+                  {formatHoraCurta(horaEntrega)}
+                </Text>
+                {this.renderBotaoPreparo(item, { compact: true })}
+              </View>
             )}
           </View>
         )}
 
-        {/* Ações */}
-        <View style={styles.actionsRow}>
-          {item.estado === 'Em Preparo' ? (
-            <Button
-              color="orange"
-              title="Pronto"
-              onPress={() => this.alterar_estado(item.id, 'Pronto')}
-            />
-          ) : item.estado === 'A Fazer' ? (
-            <Button
-              color="blue"
-              title="Começar"
-              onPress={() => this.alterar_estado(item.id, 'Em Preparo')}
-            />
-          ) : (
-            <Button
-              color="green"
-              title="Desfazer"
-              onPress={() => this.alterar_estado(item.id, 'A Fazer')}
-            />
-          )}
-        </View>
+        {/* Ações (se sem prazo) */}
+        {!horaEntrega && <View style={styles.actionsRow}>{this.renderBotaoPreparo(item)}</View>}
       </View>
     );
   };
@@ -219,12 +350,10 @@ export default class Cozinha extends React.Component {
 
     return (
       <View style={styles.container}>
-        {/* sem header; apenas o toggle */}
+        {/* toggle filtro */}
         <View style={styles.topActions}>
-          <TouchableOpacity onPress={this.filtrar} style={styles.toggleBtn}>
-            <Text style={styles.toggleBtnText}>
-              {showFiltrado ? 'Filtrar' : 'Todos'}
-            </Text>
+          <TouchableOpacity onPress={this.filtrar} activeOpacity={0.85} style={styles.toggleBtn}>
+            <Text style={styles.toggleBtnText}>{showFiltrado ? 'Filtrar' : 'Todos'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -234,14 +363,11 @@ export default class Cozinha extends React.Component {
           renderItem={this.renderItem}
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-          ListEmptyComponent={
-            !refreshing ? (
-              <Text style={styles.emptyText}>Nenhum pedido por aqui…</Text>
-            ) : null
-          }
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />
-          }
+          ListEmptyComponent={!refreshing ? <Text style={styles.emptyText}>Nenhum pedido por aqui…</Text> : null}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />}
+          initialNumToRender={10}
+          windowSize={5}
+          removeClippedSubviews
         />
       </View>
     );
@@ -275,7 +401,7 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
 
   pillRemetente: {
-    backgroundColor: '#E8F5E9', // verde claro
+    backgroundColor: '#E8F5E9',
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -293,8 +419,30 @@ const styles = StyleSheet.create({
   deliveryBox: { marginTop: 8, backgroundColor: '#F5F5F5', borderRadius: 10, padding: 8 },
   deliveryLine: { fontSize: 13, color: '#333', marginBottom: 2 },
   deliveryLabel: { fontWeight: '700', color: '#222' },
+  deliveryInline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
   actionsRow: { marginTop: 10, alignItems: 'flex-end' },
 
   emptyText: { textAlign: 'center', marginTop: 24, color: '#777' },
+
+  // botão “chip”
+  startBtnWrapInline: { marginTop: 0 },
+  startBtn: {
+    backgroundColor: '#111827',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  startBtnCompact: { paddingVertical: 8, paddingHorizontal: 12 },
+  startBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+
+  // variantes
+  startBtnBlue: { backgroundColor: '#1565C0' },   // Começar
+  startBtnOrange: { backgroundColor: '#F59E0B' }, // Pronto
+  startBtnGreen: { backgroundColor: '#10B981' },  // Desfazer
 });

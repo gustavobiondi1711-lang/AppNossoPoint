@@ -1,5 +1,5 @@
 // opcoesScreen.js
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import {
   StatusBar,
   KeyboardAvoidingView,
 } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import { API_URL } from "./url";
 
 // ======= PALETA (alto contraste sol) =======
@@ -34,15 +35,22 @@ const COLORS = {
   chipActiveText: "#FFFFFF",
 };
 
-const formatBRL = (n) =>
-  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
-    Number(n || 0)
-  );
+const FETCH_TIMEOUT_MS = 12000;
+
+const formatBRL = (n) => {
+  const v = Number(n || 0);
+  try {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+  } catch {
+    const s = (Number.isFinite(v) ? v : 0).toFixed(2);
+    return `R$ ${s.replace(".", ",")}`;
+  }
+};
 
 function uniqBy(arr, keyFn) {
   const seen = new Set();
   const out = [];
-  for (const it of arr) {
+  for (const it of arr || []) {
     const k = keyFn(it);
     if (!seen.has(k)) {
       seen.add(k);
@@ -60,10 +68,11 @@ export default function OpcoesScreen() {
   const [somenteExtraPositivo, setSomenteExtraPositivo] = useState(false);
 
   // ======= Data =======
-  const [clusters, setClusters] = useState([]);           // lista visível (com filtro grupoSlug)
+  const [clusters, setClusters] = useState([]); // lista visível (com filtro grupoSlug)
   const [clustersForGroups, setClustersForGroups] = useState([]); // lista para chips (SEM grupoSlug)
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
   // ======= Modal de Edição =======
   const [modalVisible, setModalVisible] = useState(false);
@@ -86,13 +95,44 @@ export default function OpcoesScreen() {
   // restrição por itens
   const [restrictMap, setRestrictMap] = useState({});
 
-  // dry-run
+  // dry-run e aplicação
   const [simulating, setSimulating] = useState(false);
   const [simulateResult, setSimulateResult] = useState(null);
-
   const [applying, setApplying] = useState(false);
 
-  // ======= Derivados =======
+  // ======= Refs p/ estabilidade =======
+  const mountedRef = useRef(true);
+  const debounceTimerRef = useRef(null);
+
+  // AbortControllers por request (latest-wins)
+  const aggAbortRef = useRef(null);
+  const groupAbortRef = useRef(null);
+  const pendingTimersRef = useRef([]);
+
+  // request ids p/ ignorar respostas antigas
+  const aggReqIdRef = useRef(0);
+  const groupReqIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const unsub = NetInfo.addEventListener((state) => {
+      setIsOnline(!!state.isConnected);
+    });
+    return () => {
+      mountedRef.current = false;
+      unsub && unsub();
+
+      // aborta fetches pendentes
+      try { aggAbortRef.current?.abort(); } catch {}
+      try { groupAbortRef.current?.abort(); } catch {}
+
+      // limpa timeouts
+      pendingTimersRef.current.forEach((t) => clearTimeout(t));
+      pendingTimersRef.current = [];
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
+
   const gruposDisponiveis = useMemo(() => {
     const gs = uniqBy(
       (clustersForGroups || []).map((c) => ({ slug: c.grupo_slug, nome: c.grupo })),
@@ -101,8 +141,39 @@ export default function OpcoesScreen() {
     return gs;
   }, [clustersForGroups]);
 
+  // ======= Helper fetch com timeout/cancelamento =======
+  const fetchWithTimeout = async (url, options = {}, which = "agg") => {
+    if (!isOnline) {
+      throw new Error("Sem internet no dispositivo.");
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    pendingTimersRef.current.push(timeout);
+
+    // aborta anterior do mesmo tipo
+    if (which === "agg") {
+      try { aggAbortRef.current?.abort(); } catch {}
+      aggAbortRef.current = controller;
+      aggReqIdRef.current += 1;
+    } else if (which === "group") {
+      try { groupAbortRef.current?.abort(); } catch {}
+      groupAbortRef.current = controller;
+      groupReqIdRef.current += 1;
+    }
+
+    try {
+      const resp = await fetch(url, { ...options, signal: controller.signal });
+      return resp;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   // ======= Fetchers =======
   async function fetchAggregate({ showSpinner = true } = {}) {
+    const reqId = aggReqIdRef.current + 1; // reservamos id
+    aggReqIdRef.current = reqId;
+
     try {
       if (showSpinner) setLoading(true);
 
@@ -114,22 +185,32 @@ export default function OpcoesScreen() {
       params.set("limit", "100");
 
       const url = `${API_URL}/opcoes/aggregate?${params.toString()}`;
-      const res = await fetch(url);
+      const res = await fetchWithTimeout(url, {}, "agg");
       if (!res.ok) {
-        const txt = await res.text();
+        const txt = await res.text().catch(() => "");
         throw new Error(`Erro ao buscar: ${res.status} ${txt}`);
       }
       const data = await res.json();
+
+      // latest-wins
+      if (!mountedRef.current || reqId !== aggReqIdRef.current) return;
       setClusters(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", err.message || "Falha ao buscar opções.");
+      if (!mountedRef.current) return;
+      const msg =
+        err?.name === "AbortError"
+          ? "Operação cancelada."
+          : err?.message || "Falha ao buscar opções.";
+      Alert.alert("Erro", msg);
     } finally {
-      if (showSpinner) setLoading(false);
+      if (mountedRef.current && showSpinner) setLoading(false);
     }
   }
 
   async function fetchGroupsAggregate() {
+    const reqId = groupReqIdRef.current + 1;
+    groupReqIdRef.current = reqId;
+
     try {
       const params = new URLSearchParams();
       if (search?.trim()) params.set("q", search.trim());
@@ -138,46 +219,62 @@ export default function OpcoesScreen() {
       params.set("limit", "500");
 
       const url = `${API_URL}/opcoes/aggregate?${params.toString()}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        setClustersForGroups(Array.isArray(data) ? data : []);
-      } else {
+      const res = await fetchWithTimeout(url, {}, "group");
+      if (!res.ok) {
+        // latest-wins: ainda assim, se falhar, limpamos somente se for a resposta vigente
+        if (!mountedRef.current || reqId !== groupReqIdRef.current) return;
         setClustersForGroups([]);
+        return;
       }
+      const data = await res.json();
+      if (!mountedRef.current || reqId !== groupReqIdRef.current) return;
+      setClustersForGroups(Array.isArray(data) ? data : []);
     } catch {
-      setClustersForGroups([]);
+      if (!mountedRef.current) return;
+      // se caiu, mantemos estado anterior para não piscar chips
     }
   }
 
   async function onRefresh() {
     try {
       setRefreshing(true);
-      await Promise.all([fetchAggregate({ showSpinner: false }), fetchGroupsAggregate()]);
+      await Promise.all([
+        fetchAggregate({ showSpinner: false }),
+        fetchGroupsAggregate(),
+      ]);
     } finally {
-      setRefreshing(false);
+      if (mountedRef.current) setRefreshing(false);
     }
   }
 
+  // primeira carga
   useEffect(() => {
     Promise.all([fetchAggregate(), fetchGroupsAggregate()]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // debounce para filtros: search/esgotados/extra>0
   useEffect(() => {
-    const t = setTimeout(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
       fetchAggregate({ showSpinner: true });
       fetchGroupsAggregate();
-    }, 300);
-    return () => clearTimeout(t);
+    }, 350);
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, somenteEsgotados, somenteExtraPositivo]);
 
+  // fetch ao trocar grupo (leve debounce)
   useEffect(() => {
-    const t = setTimeout(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
       fetchAggregate({ showSpinner: true });
-    }, 100);
-    return () => clearTimeout(t);
+    }, 150);
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grupoSlug]);
 
@@ -185,7 +282,7 @@ export default function OpcoesScreen() {
   function openEditModal(cluster) {
     setCurrentCluster(cluster);
     const initialRestrict = {};
-    (cluster.amostra_itens || []).forEach((it) => {
+    (cluster?.amostra_itens || []).forEach((it) => {
       initialRestrict[it.item_id] = true;
     });
     setRestrictMap(initialRestrict);
@@ -209,9 +306,11 @@ export default function OpcoesScreen() {
   }
 
   function closeEditModal() {
+    if (applying || simulating) return; // evita fechar enquanto processa
     setModalVisible(false);
     setCurrentCluster(null);
     setSimulateResult(null);
+    setRestrictMap({});
   }
 
   function toggleRestrict(itemId) {
@@ -229,7 +328,9 @@ export default function OpcoesScreen() {
     if (!currentCluster) return null;
     const set = {};
     if (editValorEnabled && editValor !== "") {
-      const v = Number(String(editValor).replace(",", ".").replace(/[^\d.-]/g, ""));
+      const v = Number(
+        String(editValor).replace(",", ".").replace(/[^\d.-]/g, "")
+      );
       if (!Number.isFinite(v)) {
         Alert.alert("Valor inválido", "Informe um número válido para o valor extra.");
         return null;
@@ -240,12 +341,18 @@ export default function OpcoesScreen() {
       set.esgotado = editEsgotado ? 1 : 0;
     }
     if (Object.keys(set).length === 0) {
-      Alert.alert("Nada para alterar", "Habilite pelo menos um campo (Valor extra ou Esgotado).");
+      Alert.alert(
+        "Nada para alterar",
+        "Habilite pelo menos um campo (Valor extra ou Esgotado)."
+      );
       return null;
     }
     const items = selectedItemIds();
     return {
-      where: { grupo_slug: currentCluster.grupo_slug, opcao_slug: currentCluster.opcao_slug },
+      where: {
+        grupo_slug: currentCluster.grupo_slug,
+        opcao_slug: currentCluster.opcao_slug,
+      },
       restrict_items: items.length ? items : undefined,
       set,
       dry_run,
@@ -253,62 +360,97 @@ export default function OpcoesScreen() {
   }
 
   async function doSimulateOptions() {
+    if (simulating || applying) return;
+    if (!isOnline) {
+      Alert.alert("Sem internet", "Conecte-se para simular.");
+      return;
+    }
     const payload = buildPayloadOptions(true);
     if (!payload) return;
     try {
       setSimulating(true);
-      const res = await fetch(`${API_URL}/opcoes/bulk-update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetchWithTimeout(
+        `${API_URL}/opcoes/bulk-update`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        "agg"
+      );
       if (!res.ok) {
-        const txt = await res.text();
+        const txt = await res.text().catch(() => "");
         throw new Error(`Erro ao simular: ${res.status} ${txt}`);
       }
       const data = await res.json();
+      if (!mountedRef.current) return;
       setSimulateResult(data);
     } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", err.message || "Falha ao simular alterações.");
+      if (!mountedRef.current) return;
+      const msg =
+        err?.name === "AbortError"
+          ? "Simulação cancelada."
+          : err?.message || "Falha ao simular alterações.";
+      Alert.alert("Erro", msg);
     } finally {
-      setSimulating(false);
+      if (mountedRef.current) setSimulating(false);
     }
   }
 
   async function doApplyOptions() {
+    if (applying || simulating) return;
+    if (!isOnline) {
+      Alert.alert("Sem internet", "Conecte-se para aplicar alterações.");
+      return;
+    }
     const payload = buildPayloadOptions(false);
     if (!payload) return;
+
     try {
       setApplying(true);
-      const res = await fetch(`${API_URL}/opcoes/bulk-update`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetchWithTimeout(
+        `${API_URL}/opcoes/bulk-update`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        "agg"
+      );
       if (!res.ok) {
-        const txt = await res.text();
+        const txt = await res.text().catch(() => "");
         throw new Error(`Erro ao aplicar: ${res.status} ${txt}`);
       }
       const data = await res.json();
 
-      // sincroniza JSON dos itens (bulk de opções altera a tabela)
-      if (Array.isArray(data.items) && data.items.length) {
-        await fetch(`${API_URL}/opcoes/sync-json`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: data.items }),
-        }).catch(() => {});
+      // sincroniza JSON dos itens (bulk de opções altera a tabela) — best-effort
+      if (Array.isArray(data?.items) && data.items.length) {
+        fetchWithTimeout(
+          `${API_URL}/opcoes/sync-json`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: data.items }),
+          },
+          "group"
+        ).catch(() => {});
       }
 
-      Alert.alert("Sucesso", `Atualizado: ${data.updated ?? data.matched ?? 0} ocorrência(s).`);
+      Alert.alert(
+        "Sucesso",
+        `Atualizado: ${data.updated ?? data.matched ?? 0} ocorrência(s).`
+      );
       closeEditModal();
       fetchAggregate();
     } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", err.message || "Falha ao aplicar alterações.");
+      if (!mountedRef.current) return;
+      const msg =
+        err?.name === "AbortError"
+          ? "Aplicação cancelada."
+          : err?.message || "Falha ao aplicar alterações.";
+      Alert.alert("Erro", msg);
     } finally {
-      setApplying(false);
+      if (mountedRef.current) setApplying(false);
     }
   }
 
@@ -331,7 +473,10 @@ export default function OpcoesScreen() {
       set.ids = String(grpIds);
     }
     if (Object.keys(set).length === 0) {
-      Alert.alert("Nada para alterar", "Habilite pelo menos um campo (max_selected, obrigatório ou ids).");
+      Alert.alert(
+        "Nada para alterar",
+        "Habilite pelo menos um campo (max_selected, obrigatório ou ids)."
+      );
       return null;
     }
     const items = selectedItemIds();
@@ -344,52 +489,82 @@ export default function OpcoesScreen() {
   }
 
   async function doSimulateGroup() {
+    if (simulating || applying) return;
+    if (!isOnline) {
+      Alert.alert("Sem internet", "Conecte-se para simular.");
+      return;
+    }
     const payload = buildPayloadGroup(true);
     if (!payload) return;
     try {
       setSimulating(true);
-      const res = await fetch(`${API_URL}/opcoes/group-props-bulk`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetchWithTimeout(
+        `${API_URL}/opcoes/group-props-bulk`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        "group"
+      );
       if (!res.ok) {
-        const txt = await res.text();
+        const txt = await res.text().catch(() => "");
         throw new Error(`Erro ao simular: ${res.status} ${txt}`);
       }
       const data = await res.json();
+      if (!mountedRef.current) return;
       setSimulateResult(data);
     } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", err.message || "Falha ao simular propriedades do grupo.");
+      if (!mountedRef.current) return;
+      const msg =
+        err?.name === "AbortError"
+          ? "Simulação cancelada."
+          : err?.message || "Falha ao simular propriedades do grupo.";
+      Alert.alert("Erro", msg);
     } finally {
-      setSimulating(false);
+      if (mountedRef.current) setSimulating(false);
     }
   }
 
   async function doApplyGroup() {
+    if (applying || simulating) return;
+    if (!isOnline) {
+      Alert.alert("Sem internet", "Conecte-se para aplicar alterações.");
+      return;
+    }
     const payload = buildPayloadGroup(false);
     if (!payload) return;
     try {
       setApplying(true);
-      const res = await fetch(`${API_URL}/opcoes/group-props-bulk`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetchWithTimeout(
+        `${API_URL}/opcoes/group-props-bulk`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+        "group"
+      );
       if (!res.ok) {
-        const txt = await res.text();
+        const txt = await res.text().catch(() => "");
         throw new Error(`Erro ao aplicar: ${res.status} ${txt}`);
       }
       const data = await res.json();
-      Alert.alert("Sucesso", `Grupos atualizados em ${data.updated ?? data.matched ?? 0} item(ns).`);
+      Alert.alert(
+        "Sucesso",
+        `Grupos atualizados em ${data.updated ?? data.matched ?? 0} item(ns).`
+      );
       closeEditModal();
       fetchAggregate();
     } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", err.message || "Falha ao aplicar propriedades do grupo.");
+      if (!mountedRef.current) return;
+      const msg =
+        err?.name === "AbortError"
+          ? "Aplicação cancelada."
+          : err?.message || "Falha ao aplicar propriedades do grupo.";
+      Alert.alert("Erro", msg);
     } finally {
-      setApplying(false);
+      if (mountedRef.current) setApplying(false);
     }
   }
 
@@ -397,14 +572,18 @@ export default function OpcoesScreen() {
   const renderCluster = ({ item }) => (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{item.grupo} • {item.opcao}</Text>
+        <Text style={styles.cardTitle}>
+          {item.grupo} • {item.opcao}
+        </Text>
         <View style={styles.badges}>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>Ocorrências: {item.ocorrencias}</Text>
           </View>
           {item.esgotados > 0 ? (
             <View style={[styles.badge, styles.badgeWarn]}>
-              <Text style={[styles.badgeText, styles.badgeWarnText]}>Esgotados: {item.esgotados}</Text>
+              <Text style={[styles.badgeText, styles.badgeWarnText]}>
+                Esgotados: {item.esgotados}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -412,19 +591,28 @@ export default function OpcoesScreen() {
 
       <View style={styles.row}>
         <Text style={styles.dim}>Média extra:</Text>
-        <Text style={styles.value}>{formatBRL(item.media_valor_extra ?? 0)}</Text>
+        <Text style={styles.value}>
+          {formatBRL(item.media_valor_extra ?? 0)}
+        </Text>
       </View>
 
       <View style={styles.itemsRow}>
         {(item.amostra_itens || []).slice(0, 6).map((it) => (
           <View key={it.item_id} style={styles.itemChip}>
-            <Text style={styles.itemChipText}>#{it.item_id} {it.item_nome}</Text>
+            <Text style={styles.itemChipText}>
+              #{it.item_id} {it.item_nome}
+            </Text>
           </View>
         ))}
       </View>
 
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.editBtn} onPress={() => openEditModal(item)}>
+        <TouchableOpacity
+          style={[styles.editBtn, (!isOnline || applying || simulating) && { opacity: 0.7 }]}
+          onPress={() => openEditModal(item)}
+          disabled={!isOnline || applying || simulating}
+          activeOpacity={0.8}
+        >
           <Text style={styles.editBtnText}>Editar</Text>
         </TouchableOpacity>
       </View>
@@ -435,6 +623,15 @@ export default function OpcoesScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
 
+      {/* Banner simples de conectividade */}
+      {!isOnline && (
+        <View style={{ backgroundColor: "#fee2e2", padding: 8 }}>
+          <Text style={{ color: "#991b1b", textAlign: "center", fontWeight: "700" }}>
+            Sem internet — exibindo dados locais/anteriores
+          </Text>
+        </View>
+      )}
+
       {/* Filtros */}
       <View style={styles.filters}>
         <TextInput
@@ -444,11 +641,18 @@ export default function OpcoesScreen() {
           onChangeText={setSearch}
           style={styles.input}
           returnKeyType="search"
+          autoCorrect={false}
+          autoCapitalize="none"
         />
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8 }}>
-          <Pressable style={[styles.chip, !grupoSlug && styles.chipActive]} onPress={() => setGrupoSlug("")}>
-            <Text style={[styles.chipText, !grupoSlug && styles.chipTextActive]}>Todos</Text>
+          <Pressable
+            style={[styles.chip, !grupoSlug && styles.chipActive]}
+            onPress={() => setGrupoSlug("")}
+          >
+            <Text style={[styles.chipText, !grupoSlug && styles.chipTextActive]}>
+              Todos
+            </Text>
           </Pressable>
           {gruposDisponiveis.map((g) => (
             <Pressable
@@ -456,7 +660,14 @@ export default function OpcoesScreen() {
               style={[styles.chip, grupoSlug === g.slug && styles.chipActive]}
               onPress={() => setGrupoSlug(g.slug)}
             >
-              <Text style={[styles.chipText, grupoSlug === g.slug && styles.chipTextActive]}>{g.nome}</Text>
+              <Text
+                style={[
+                  styles.chipText,
+                  grupoSlug === g.slug && styles.chipTextActive,
+                ]}
+              >
+                {g.nome}
+              </Text>
             </Pressable>
           ))}
           {!!grupoSlug && (
@@ -501,6 +712,7 @@ export default function OpcoesScreen() {
           renderItem={renderCluster}
           refreshing={refreshing}
           onRefresh={onRefresh}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <Text style={{ color: COLORS.textDim, textAlign: "center", marginTop: 32 }}>
               Nenhum resultado.
@@ -521,14 +733,19 @@ export default function OpcoesScreen() {
               <Text style={styles.modalTitle}>
                 {currentCluster ? `${currentCluster.grupo} • ${currentCluster.opcao}` : "Edição"}
               </Text>
-              <TouchableOpacity onPress={closeEditModal} style={styles.closePill}>
+              <TouchableOpacity
+                onPress={closeEditModal}
+                style={[styles.closePill, (applying || simulating) && { opacity: 0.7 }]}
+                disabled={applying || simulating}
+                activeOpacity={0.8}
+              >
                 <Text style={styles.closePillText}>Fechar</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {currentCluster ? (
-            <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
+            <ScrollView contentContainerStyle={{ paddingBottom: 140 }} keyboardShouldPersistTaps="handled">
               {/* Resumo */}
               <View style={styles.summary}>
                 <Text style={styles.summaryText}>
@@ -540,6 +757,11 @@ export default function OpcoesScreen() {
                 <Text style={styles.summaryText}>
                   Média extra: <Text style={styles.bold}>{formatBRL(currentCluster.media_valor_extra || 0)}</Text>
                 </Text>
+                {!isOnline && (
+                  <Text style={[styles.summaryText, { color: "#b91c1c", marginTop: 6 }]}>
+                    Offline — alterações desabilitadas
+                  </Text>
+                )}
               </View>
 
               {/* Seleção de itens */}
@@ -555,7 +777,9 @@ export default function OpcoesScreen() {
                     >
                       <View style={[styles.checkbox, checked && styles.checkboxOn]} />
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.itemRowTitle}>#{it.item_id} {it.item_nome}</Text>
+                        <Text style={styles.itemRowTitle}>
+                          #{it.item_id} {it.item_nome}
+                        </Text>
                         <Text style={styles.itemRowSub}>
                           extra: {formatBRL(it.valor_extra)} • {it.esgotado ? "ESGOTADO" : "disponível"}
                         </Text>
@@ -569,8 +793,12 @@ export default function OpcoesScreen() {
               <Text style={styles.sectionTitle}>Alterar opções</Text>
               <View style={styles.editBlock}>
                 <View style={styles.switchItem}>
-                  <Switch value={editValorEnabled} onValueChange={setEditValorEnabled}
-                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                  <Switch
+                    value={editValorEnabled}
+                    onValueChange={setEditValorEnabled}
+                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                    thumbColor="#fff"
+                  />
                   <Text style={styles.switchText}>Editar valor extra</Text>
                 </View>
                 {editValorEnabled && (
@@ -585,14 +813,22 @@ export default function OpcoesScreen() {
                 )}
 
                 <View style={[styles.switchItem, { marginTop: 8 }]}>
-                  <Switch value={editEsgotadoEnabled} onValueChange={setEditEsgotadoEnabled}
-                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                  <Switch
+                    value={editEsgotadoEnabled}
+                    onValueChange={setEditEsgotadoEnabled}
+                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                    thumbColor="#fff"
+                  />
                   <Text style={styles.switchText}>Editar status esgotado</Text>
                 </View>
                 {editEsgotadoEnabled && (
                   <View style={styles.switchRowLeft}>
-                    <Switch value={editEsgotado} onValueChange={setEditEsgotado}
-                      trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                    <Switch
+                      value={editEsgotado}
+                      onValueChange={setEditEsgotado}
+                      trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                      thumbColor="#fff"
+                    />
                     <Text style={styles.switchText}>
                       {editEsgotado ? "Marcar ESGOTADO" : "Marcar disponível"}
                     </Text>
@@ -600,11 +836,29 @@ export default function OpcoesScreen() {
                 )}
 
                 <View style={styles.actionsRow}>
-                  <TouchableOpacity style={[styles.btn, styles.btnOutline]} onPress={doSimulateOptions} disabled={simulating || applying}>
-                    {simulating ? <ActivityIndicator color={COLORS.blue} /> : <Text style={[styles.btnText, styles.btnOutlineText]}>Simular</Text>}
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnOutline]}
+                    onPress={doSimulateOptions}
+                    disabled={simulating || applying || !isOnline}
+                    activeOpacity={0.8}
+                  >
+                    {simulating ? (
+                      <ActivityIndicator color={COLORS.blue} />
+                    ) : (
+                      <Text style={[styles.btnText, styles.btnOutlineText]}>Simular</Text>
+                    )}
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={doApplyOptions} disabled={applying}>
-                    {applying ? <ActivityIndicator color="#fff" /> : <Text style={[styles.btnText, styles.btnPrimaryText]}>Aplicar</Text>}
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnPrimary]}
+                    onPress={doApplyOptions}
+                    disabled={applying || !isOnline}
+                    activeOpacity={0.8}
+                  >
+                    {applying ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={[styles.btnText, styles.btnPrimaryText]}>Aplicar</Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -613,8 +867,12 @@ export default function OpcoesScreen() {
               <Text style={styles.sectionTitle}>Propriedades do grupo</Text>
               <View style={styles.editBlock}>
                 <View style={styles.switchItem}>
-                  <Switch value={grpMaxSelEnabled} onValueChange={setGrpMaxSelEnabled}
-                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                  <Switch
+                    value={grpMaxSelEnabled}
+                    onValueChange={setGrpMaxSelEnabled}
+                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                    thumbColor="#fff"
+                  />
                   <Text style={styles.switchText}>Editar max_selected</Text>
                 </View>
                 {grpMaxSelEnabled && (
@@ -629,14 +887,22 @@ export default function OpcoesScreen() {
                 )}
 
                 <View style={[styles.switchItem, { marginTop: 8 }]}>
-                  <Switch value={grpObrigEnabled} onValueChange={setGrpObrigEnabled}
-                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                  <Switch
+                    value={grpObrigEnabled}
+                    onValueChange={setGrpObrigEnabled}
+                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                    thumbColor="#fff"
+                  />
                   <Text style={styles.switchText}>Editar obrigatório</Text>
                 </View>
                 {grpObrigEnabled && (
                   <View style={styles.switchRowLeft}>
-                    <Switch value={grpObrig} onValueChange={setGrpObrig}
-                      trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                    <Switch
+                      value={grpObrig}
+                      onValueChange={setGrpObrig}
+                      trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                      thumbColor="#fff"
+                    />
                     <Text style={styles.switchText}>
                       {grpObrig ? "Marcar OBRIGATÓRIO" : "Marcar opcional"}
                     </Text>
@@ -644,8 +910,12 @@ export default function OpcoesScreen() {
                 )}
 
                 <View style={[styles.switchItem, { marginTop: 8 }]}>
-                  <Switch value={grpIdsEnabled} onValueChange={setGrpIdsEnabled}
-                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }} thumbColor="#fff" />
+                  <Switch
+                    value={grpIdsEnabled}
+                    onValueChange={setGrpIdsEnabled}
+                    trackColor={{ false: "#CFE3FF", true: COLORS.blue }}
+                    thumbColor="#fff"
+                  />
                   <Text style={styles.switchText}>Editar campo IDs</Text>
                 </View>
                 {grpIdsEnabled && (
@@ -659,20 +929,28 @@ export default function OpcoesScreen() {
                 )}
 
                 <View style={styles.actionsRow}>
-                  <TouchableOpacity style={[styles.btn, styles.btnOutline]} onPress={doSimulateGroup} disabled={simulating || applying}>
-                    {simulating ? <ActivityIndicator color={COLORS.blue} /> : <Text style={[styles.btnText, styles.btnOutlineText]}>Simular grupo</Text>}
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnOutline]}
+                    onPress={doSimulateGroup}
+                    disabled={simulating || applying || !isOnline}
+                    activeOpacity={0.8}
+                  >
+                    {simulating ? (
+                      <ActivityIndicator color={COLORS.blue} />
+                    ) : (
+                      <Text style={[styles.btnText, styles.btnOutlineText]}>Simular grupo</Text>
+                    )}
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.btn, styles.btnPrimary]}
                     onPress={doApplyGroup}
-                    disabled={applying}
+                    disabled={applying || !isOnline}
+                    activeOpacity={0.8}
                   >
                     {applying ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
-                      <Text style={[styles.btnText, styles.btnPrimaryText]}>
-                        Aplicar grupo
-                      </Text>
+                      <Text style={[styles.btnText, styles.btnPrimaryText]}>Aplicar grupo</Text>
                     )}
                   </TouchableOpacity>
                 </View>
@@ -686,17 +964,13 @@ export default function OpcoesScreen() {
                     Ocorrências encontradas: {simulateResult.matched}
                   </Text>
                   <Text style={styles.simText}>
-                    Seriam alteradas:{" "}
-                    {simulateResult.would_update ??
-                      simulateResult.matched ??
-                      0}
+                    Seriam alteradas: {simulateResult.would_update ?? simulateResult.matched ?? 0}
                   </Text>
-                  {Array.isArray(simulateResult.items) &&
-                    simulateResult.items.length > 0 && (
-                      <Text style={styles.simHint}>
-                        Itens afetados: {simulateResult.items.join(", ")}
-                      </Text>
-                    )}
+                  {Array.isArray(simulateResult.items) && simulateResult.items.length > 0 && (
+                    <Text style={styles.simHint}>
+                      Itens afetados: {simulateResult.items.join(", ")}
+                    </Text>
+                  )}
                 </View>
               )}
             </ScrollView>
@@ -708,7 +982,12 @@ export default function OpcoesScreen() {
 
           {/* Botão fechar fixo no rodapé para acessibilidade */}
           <View style={styles.modalFooter}>
-            <TouchableOpacity onPress={closeEditModal} style={styles.closeBottomBtn}>
+            <TouchableOpacity
+              onPress={closeEditModal}
+              style={[styles.closeBottomBtn, (applying || simulating) && { opacity: 0.7 }]}
+              disabled={applying || simulating}
+              activeOpacity={0.8}
+            >
               <Text style={styles.closeBottomText}>Fechar</Text>
             </TouchableOpacity>
           </View>
@@ -827,8 +1106,7 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
   },
   modalHeaderSafe: {
-    paddingTop:
-      Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 16,
+    paddingTop: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 8 : 16,
     backgroundColor: COLORS.bg,
   },
   modalHeader: {
@@ -951,4 +1229,3 @@ const styles = StyleSheet.create({
   },
   closeBottomText: { color: "#fff", fontWeight: "900", fontSize: 16 },
 });
-

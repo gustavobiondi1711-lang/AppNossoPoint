@@ -6,12 +6,12 @@ import {
   Modal,
   Text,
   StyleSheet,
-  Button,
   TextInput,
   RefreshControl,
   KeyboardAvoidingView,
   Platform,
   Switch,
+  Alert,
 } from 'react-native';
 import { UserContext } from '../UserContext';
 import { getSocket } from '../socket';
@@ -28,32 +28,40 @@ const Row = React.memo(function Row({
 }) {
   return (
     <TouchableOpacity
-      activeOpacity={0.8}
+      activeOpacity={editing ? 0.8 : 1}
       onPress={() => editing && onPressRow(item, index)}
     >
       <View style={styles.tableRow}>
-        <Text style={styles.itemText}>{item.item}</Text>
+        <Text style={styles.itemText} numberOfLines={1}>
+          {item.item}
+        </Text>
 
         <View style={styles.valueColumn}>
           {editing ? (
             <View style={styles.editRow}>
-              <Button title="-" onPress={() => onDec(index)} />
+              <TouchableOpacity style={[styles.stepBtn, styles.stepMinus]} onPress={() => onDec(index)}>
+                <Text style={styles.stepTxt}>-</Text>
+              </TouchableOpacity>
+
               <TextInput
                 style={styles.input}
                 value={String(item.quantidade ?? 0)}
                 onChangeText={(t) => onChangeQty(t, index)}
                 keyboardType="numeric"
                 maxLength={6}
+                returnKeyType="done"
               />
-              <Button title="+" onPress={() => onInc(index)} />
+
+              <TouchableOpacity style={[styles.stepBtn, styles.stepPlus]} onPress={() => onInc(index)}>
+                <Text style={styles.stepTxt}>+</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.valueRowSimples}>
               <Text style={styles.quantidade}>{item.quantidade}</Text>
               <Text style={styles.estoque_ideal}>{item.estoque_ideal}</Text>
               <Text style={styles.diffEstoque}>
-                {(parseInt(item.estoque_ideal) || 0) -
-                  (parseInt(item.quantidade) || 0)}
+                {(parseInt(item.estoque_ideal || 0) || 0) - (parseInt(item.quantidade || 0) || 0)}
               </Text>
             </View>
           )}
@@ -105,39 +113,32 @@ export default class EstoqueScreen extends React.Component {
       qtyAction: 'diminuir',
       qtyDelta: '1',
       emAmbos: true,
+
+      // lock contra cliques/duplo envio
+      sending: false,
     };
 
-    // fonte da verdade (fora do state para menos diffs)
-    this.dataAll = [];
-    // alterações em Map (O(1))
+    this.dataAll = []; // fonte da verdade
     this.itensAlteradosMap = new Map();
 
-    // binds
-    this.refreshData = this.refreshData.bind(this);
-    this.renderItem = this.renderItem.bind(this);
-    this.openQtyModal = this.openQtyModal.bind(this);
-    this.cancelQtyModal = this.cancelQtyModal.bind(this);
-    this.confirmQtyModal = this.confirmQtyModal.bind(this);
-    this.diminuirQuantidade = this.diminuirQuantidade.bind(this);
-    this.aumentarQuantidade = this.aumentarQuantidade.bind(this);
-    this.alterarQuantidade = this.alterarQuantidade.bind(this);
-    this.handleConfirmar = this.handleConfirmar.bind(this);
-    this.filtrar = this.filtrar.bind(this);
-    this.onChangeBusca = this.onChangeBusca.bind(this);
-    this.emitEditar = this.emitEditar.bind(this);
+    this.refreshTimeout = null;
+    this.buscaDebounce = null;
+    this._mounted = false;
   }
 
   componentDidMount() {
+    this._mounted = true;
     this.socket = getSocket();
 
     // listener estável
-    this.socket.on('respostaEstoque', this.handleRespostaEstoque);
+    this.socket?.on('respostaEstoque', this.handleRespostaEstoque);
 
     // 1ª carga
     this.refreshData();
   }
 
   componentWillUnmount() {
+    this._mounted = false;
     if (this.socket) {
       this.socket.off('respostaEstoque', this.handleRespostaEstoque);
     }
@@ -149,52 +150,55 @@ export default class EstoqueScreen extends React.Component {
   handleRespostaEstoque = (payload) => {
     const lista = payload?.dataEstoque ?? [];
     this.dataAll = Array.isArray(lista) ? lista.slice() : [];
+    if (!this._mounted) return;
     this.setState({ data: this.dataAll, refreshing: false });
     this.itensAlteradosMap.clear();
   };
 
-  // ---------- refresh ----------
-  refreshData() {
+  // ---------- refresh com fallback ----------
+  refreshData = () => {
+    if (this.state.refreshing) return; // anti-spam
     this.setState({ refreshing: true }, () => {
-      this.socket.emit('getEstoque', false);
+      this.socket?.emit('getEstoque', false);
       if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
-      this.refreshTimeout = setTimeout(
-        () => this.setState({ refreshing: false }),
-        10000
-      );
+      // fallback de rede
+      this.refreshTimeout = setTimeout(() => {
+        if (this._mounted) this.setState({ refreshing: false });
+      }, 10000);
     });
-  }
+  };
 
-  // ---------- busca com debounce (minúsculas) ----------
-  onChangeBusca(text) {
+  // ---------- busca com debounce e normalização ----------
+  normalize = (s) =>
+    String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+  onChangeBusca = (text) => {
     const raw = String(text || '');
     const q = this.normalize(raw);
-  
-    this.setState({ estoque: raw }); // mantém o que o usuário digitou
-  
+    this.setState({ estoque: raw });
+
     if (this.buscaDebounce) clearTimeout(this.buscaDebounce);
     this.buscaDebounce = setTimeout(() => {
       const base = Array.isArray(this.dataAll) ? this.dataAll : [];
-  
-      // vazio → retorna tudo
       if (!q) {
-        this.setState({ data: base });
+        if (this._mounted) this.setState({ data: base });
         return;
       }
-  
+
       const words = q.split(/\s+/).filter(Boolean);
-  
       const starts = [];
       const allWords = [];
       const includes = [];
-  
+
       for (let i = 0; i < base.length; i++) {
         const it = base[i];
         const name = this.normalize(it?.item);
-  
         if (!name) continue;
-  
-        // começa com QUALQUER palavra
+
         let matched = false;
         for (const w of words) {
           if (name.startsWith(w)) {
@@ -204,14 +208,12 @@ export default class EstoqueScreen extends React.Component {
           }
         }
         if (matched) continue;
-  
-        // contém TODAS as palavras (se houver > 1)
+
         if (words.length > 1 && words.every((w) => name.includes(w))) {
           allWords.push(it);
           continue;
         }
-  
-        // contém QUALQUER palavra
+
         for (const w of words) {
           if (name.includes(w)) {
             includes.push(it);
@@ -219,26 +221,25 @@ export default class EstoqueScreen extends React.Component {
           }
         }
       }
-  
-      // concatena por prioridade e remove duplicatas preservando a ordem
+
       const seen = new Set();
       const ranked = [];
       for (const bucket of [starts, allWords, includes]) {
         for (const it of bucket) {
-          const key = it?.item ?? it; // use o identificador estável do item (ex.: id) se tiver
+          const key = it?.item ?? it; // se tiver id estável, use it.id
           if (!seen.has(key)) {
             seen.add(key);
             ranked.push(it);
           }
         }
       }
-  
-      this.setState({ data: ranked });
+
+      if (this._mounted) this.setState({ data: ranked });
     }, 150);
-  }
+  };
 
   // ---------- atualizações cirúrgicas ----------
-  updateItemByIndex(updater, idx) {
+  updateItemByIndex = (updater, idx) => {
     this.setState((prev) => {
       const arr = prev.data.slice();
       const oldItem = arr[idx];
@@ -257,30 +258,30 @@ export default class EstoqueScreen extends React.Component {
 
       return { data: arr };
     });
-  }
+  };
 
-  diminuirQuantidade(index) {
+  diminuirQuantidade = (index) => {
     this.updateItemByIndex((old) => {
       const q = Math.max(0, (parseInt(old.quantidade) || 0) - 1);
       return { ...old, quantidade: String(q) };
     }, index);
-  }
+  };
 
-  aumentarQuantidade(index) {
+  aumentarQuantidade = (index) => {
     this.updateItemByIndex((old) => {
       const q = (parseInt(old.quantidade) || 0) + 1;
       return { ...old, quantidade: String(q) };
     }, index);
-  }
+  };
 
-  alterarQuantidade(text, index) {
+  alterarQuantidade = (text, index) => {
     const n = parseInt(text, 10);
     const q = Number.isFinite(n) ? Math.max(0, n) : 0;
     this.updateItemByIndex((old) => ({ ...old, quantidade: String(q) }), index);
-  }
+  };
 
-  // ---------- modal quantidade rápida ----------
-  openQtyModal(item, index) {
+  // ---------- quantidade rápida ----------
+  openQtyModal = (item, index) => {
     this.setState({
       showQtyModal: true,
       selectedItem: item,
@@ -288,9 +289,9 @@ export default class EstoqueScreen extends React.Component {
       qtyAction: 'diminuir',
       qtyDelta: '1',
     });
-  }
+  };
 
-  cancelQtyModal() {
+  cancelQtyModal = () => {
     this.setState({
       showQtyModal: false,
       selectedItem: null,
@@ -298,53 +299,63 @@ export default class EstoqueScreen extends React.Component {
       qtyAction: 'diminuir',
       qtyDelta: '1',
     });
-  }
+  };
 
-  confirmQtyModal() {
+  confirmQtyModal = () => {
     const { selectedItemIndex, qtyAction, qtyDelta } = this.state;
     if (selectedItemIndex == null) return;
     const delta = Math.max(0, parseInt(qtyDelta, 10) || 0);
 
     this.updateItemByIndex((old) => {
       const atual = parseInt(old.quantidade, 10) || 0;
-      const novo =
-        qtyAction === 'aumentar' ? atual + delta : Math.max(0, atual - delta);
+      const novo = qtyAction === 'aumentar' ? atual + delta : Math.max(0, atual - delta);
       return { ...old, quantidade: String(novo) };
     }, selectedItemIndex);
 
-    this.setState({
-      showQtyModal: false,
-      selectedItem: null,
-      selectedItemIndex: null,
-      qtyAction: 'aumentar',
-      qtyDelta: '1',
+    this.cancelQtyModal();
+  };
+
+  // ---------- util: lock para envios ----------
+  sendWithLock = (fn) => {
+    if (this.state.sending) return;
+    this.setState({ sending: true }, () => {
+      try {
+        fn();
+      } finally {
+        // solta lock mesmo sem ACK
+        setTimeout(() => this._mounted && this.setState({ sending: false }), 6000);
+      }
     });
-  }
+  };
 
   // ---------- envio ----------
-  handleConfirmar() {
-    const { user } = this.context;
+  handleConfirmar = () => {
+    const { user } = this.context || {};
     const itensAlterados = Array.from(this.itensAlteradosMap.values());
-    this.socket.emit('atualizar_estoque', {
-      itensAlterados,
-      username: user.username,
-      token: user.token,
+    if (itensAlterados.length === 0) {
+      Alert.alert('Nada para enviar', 'Nenhum item foi alterado.');
+      return;
+    }
+    this.sendWithLock(() => {
+      this.socket?.emit('atualizar_estoque', {
+        itensAlterados,
+        username: user?.username,
+        token: user?.token,
+      });
+      this.setState({ showEditar: false });
+      this.itensAlteradosMap.clear();
     });
-    this.setState({ showEditar: false });
-    this.itensAlteradosMap.clear();
-  }
+  };
 
   // ---------- filtro 50% ----------
-  filtrar(flag) {
+  filtrar = (flag) => {
     const ativar = flag === 'filtrar';
     this.setState(
       (prev) => ({ showDataFiltrado: !prev.showDataFiltrado }),
       () => {
         if (ativar) {
           const half = this.dataAll.filter(
-            (it) =>
-              (parseInt(it.quantidade) || 0) <
-              (parseInt(it.estoque_ideal) || 0) * 0.5
+            (it) => (parseInt(it.quantidade) || 0) < (parseInt(it.estoque_ideal) || 0) * 0.5
           );
           this.setState({ data: half });
         } else {
@@ -352,50 +363,46 @@ export default class EstoqueScreen extends React.Component {
         }
       }
     );
-  }
-
-  normalize = (s) =>
-  String(s || '')
-    .toLowerCase()
-    .normalize('NFD')         // separa acentos
-    .replace(/[\u0300-\u036f]/g, '') // remove acentos
-    .trim();
+  };
 
   // ---------- emitir edição/adicionar/remover ----------
-  emitEditar() {
+  emitEditar = () => {
     const {
       titleEnv,
       AdicionarItem,
       AdicionarNovoNome,
       AdicionarQuantidade,
       AdicionarEstoqueIdeal,
+      emAmbos,
     } = this.state;
-    const { user } = this.context;
+    const { user } = this.context || {};
 
     if (!AdicionarItem) {
-      alert('Item nao identificado');
+      Alert.alert('Item não identificado', 'Informe o nome do item.');
       return;
     }
 
-    this.socket.emit('EditingEstoque', {
-      tipo: titleEnv,
-      item: (AdicionarItem || '').toLowerCase(),
-      novoNome: (AdicionarNovoNome || '').toLowerCase(),
-      quantidade: AdicionarQuantidade, // número
-      estoqueIdeal: AdicionarEstoqueIdeal, // número
-      estoque: 'estoque',
-      username: user.username,
-      token: user.token,
-      mudar_os_dois: this.state.emAmbos,
-    });
+    this.sendWithLock(() => {
+      this.socket?.emit('EditingEstoque', {
+        tipo: titleEnv, // 'Adicionar' | 'Editar' | 'Remover'
+        item: (AdicionarItem || '').toLowerCase(),
+        novoNome: (AdicionarNovoNome || '').toLowerCase(),
+        quantidade: AdicionarQuantidade, // número (string ok)
+        estoqueIdeal: AdicionarEstoqueIdeal, // número (string ok)
+        estoque: 'estoque',
+        username: user?.username,
+        token: user?.token,
+        mudar_os_dois: emAmbos,
+      });
 
-    this.setState({
-      AdicionarItem: '',
-      AdicionarNovoNome: '',
-      AdicionarEstoqueIdeal: '',
-      AdicionarQuantidade: '',
+      this.setState({
+        AdicionarItem: '',
+        AdicionarNovoNome: '',
+        AdicionarEstoqueIdeal: '',
+        AdicionarQuantidade: '',
+      });
     });
-  }
+  };
 
   // ---------- render item ----------
   renderItem = ({ item, index }) => (
@@ -419,6 +426,7 @@ export default class EstoqueScreen extends React.Component {
       showInputsRemover,
       titleEnv,
       estoque,
+      sending,
     } = this.state;
 
     // inputs do modal principal
@@ -428,20 +436,18 @@ export default class EstoqueScreen extends React.Component {
       inputs = [
         { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
         { key: 'quantidade', label: 'Quantidade', nome: 'AdicionarQuantidade', tipoTeclado: 'numeric', isText: false },
-        { key: 'Estoque Ideal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+        { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
       ];
       titleEnviar = 'Adicionar';
     } else if (showInputEditar) {
       inputs = [
         { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
-        { key: 'Novo nome', label: 'Novo Nome do Item', nome: 'AdicionarNovoNome', tipoTeclado: 'default', isText: true },
-        { key: 'Estoque Ideal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
+        { key: 'novo', label: 'Novo Nome do Item', nome: 'AdicionarNovoNome', tipoTeclado: 'default', isText: true },
+        { key: 'EstoqueIdeal', label: 'Estoque Ideal', nome: 'AdicionarEstoqueIdeal', tipoTeclado: 'numeric', isText: false },
       ];
       titleEnviar = 'Editar';
     } else if (showInputsRemover) {
-      inputs = [
-        { key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true },
-      ];
+      inputs = [{ key: 'nome', label: 'Nome do Item', nome: 'AdicionarItem', tipoTeclado: 'default', isText: true }];
       titleEnviar = 'Remover';
     }
 
@@ -451,6 +457,7 @@ export default class EstoqueScreen extends React.Component {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 80}
       >
+        {/* Header */}
         <View style={styles.tableHeader}>
           <View style={styles.headerSearchBox}>
             <Text style={styles.label}>Buscar item:</Text>
@@ -458,16 +465,15 @@ export default class EstoqueScreen extends React.Component {
               style={styles.inputEstoque}
               placeholder="Digite o nome do item..."
               placeholderTextColor="#999"
-              onChangeText={(text)=> this.onChangeBusca(text.toLowerCase())}
+              onChangeText={this.onChangeBusca}
               value={estoque}
+              returnKeyType="search"
             />
           </View>
 
           <TouchableOpacity
             style={styles.filterButton}
-            onPress={() =>
-              this.filtrar(this.state.showDataFiltrado ? 'desfiltrar' : 'filtrar')
-            }
+            onPress={() => this.filtrar(this.state.showDataFiltrado ? 'desfiltrar' : 'filtrar')}
           >
             <Text style={styles.filterButtonText}>
               {this.state.showDataFiltrado ? 'Desfiltrar' : 'Filtrar'}
@@ -476,50 +482,55 @@ export default class EstoqueScreen extends React.Component {
 
           {!this.state.showEditar ? (
             <TouchableOpacity
-              style={[styles.actionBtn]}
-              onPress={() => this.setState({ showEditar: true })}
+              style={[styles.actionBtn, sending && styles.btnDisabled]}
+              onPress={() => !sending && this.setState({ showEditar: true })}
+              disabled={sending}
             >
-              <Text style={styles.actionBtnText}>Editar</Text>
+              <Text style={styles.actionBtnText}>{sending ? 'Aguarde…' : 'Editar'}</Text>
             </TouchableOpacity>
           ) : (
             <View style={styles.actionButtons}>
               <TouchableOpacity
-                style={[styles.actionBtn, styles.actionBtnCancel]}
+                style={[styles.actionBtn, styles.actionBtnCancel, sending && styles.btnDisabled]}
                 onPress={() =>
-                  this.setState(
-                    { data: this.dataAll, showEditar: false },
-                    () => {
-                      this.itensAlteradosMap.clear();
-                      this.refreshData();
-                    }
-                  )
+                  !sending &&
+                  this.setState({ data: this.dataAll, showEditar: false }, () => {
+                    this.itensAlteradosMap.clear();
+                    this.refreshData();
+                  })
                 }
+                disabled={sending}
               >
                 <Text style={styles.actionBtnText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.actionBtn, styles.actionBtnConfirm]}
+                style={[styles.actionBtn, styles.actionBtnConfirm, sending && styles.btnDisabled]}
                 onPress={this.handleConfirmar}
+                disabled={sending}
               >
-                <Text style={styles.actionBtnText}>Confirmar</Text>
+                <Text style={styles.actionBtnText}>{sending ? 'Enviando…' : 'Confirmar'}</Text>
               </TouchableOpacity>
             </View>
           )}
         </View>
 
-        <View style={{ flex: 1,marginBottom: 80 }}>
+        {/* Lista */}
+        <View style={{ flex: 1, marginBottom: 80 }}>
           <FlatList
             data={this.state.data}
-            keyExtractor={(it, idx) => String(it.item || idx)}
+            keyExtractor={(it, idx) => String(it?.id ?? it?.item ?? idx)}
             renderItem={this.renderItem}
             extraData={{ editing: this.state.showEditar }}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />
-            }
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />}
             windowSize={7}
             maxToRenderPerBatch={14}
             initialNumToRender={12}
             removeClippedSubviews
+            ListEmptyComponent={
+              !refreshing ? (
+                <Text style={{ textAlign: 'center', color: '#667' }}>Nenhum item encontrado.</Text>
+              ) : null
+            }
           />
         </View>
 
@@ -557,15 +568,30 @@ export default class EstoqueScreen extends React.Component {
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.ModalTitulo}>{titleEnviar} Estoque Carrinho</Text>
+                <Text style={styles.ModalTitulo}>{(titleEnviar || 'Gerenciar') + ' Estoque Carrinho'}</Text>
               </View>
             </View>
 
             {!showInputsAdicionar && !showInputEditar && !showInputsRemover ? (
               <View style={styles.ButtonsCardapio}>
-                <Button title="Adicionar" onPress={() => this.setState({ showInputsAdicionar: true })} />
-                <Button title="Editar" onPress={() => this.setState({ showInputEditar: true })} />
-                <Button title="Remover" onPress={() => this.setState({ showInputsRemover: true })} />
+                <TouchableOpacity
+                  style={[styles.actionBtn, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputsAdicionar: true, titleEnv: 'Adicionar' })}
+                >
+                  <Text style={styles.actionBtnText}>Adicionar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputEditar: true, titleEnv: 'Editar' })}
+                >
+                  <Text style={styles.actionBtnText}>Editar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionBtnCancel, { alignSelf: 'center' }]}
+                  onPress={() => this.setState({ showInputsRemover: true, titleEnv: 'Remover' })}
+                >
+                  <Text style={styles.actionBtnText}>Remover</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <FlatList
@@ -574,34 +600,31 @@ export default class EstoqueScreen extends React.Component {
                 ListFooterComponent={<View style={{ height: 20 }} />}
                 renderItem={({ item }) => {
                   const value = this.state[item.nome];
-                
+
                   const onChange = (text) => {
                     const raw = String(text || '');
-                    const lowerOrRaw = item.isText ? raw.toLowerCase() : raw; // mantém minúsculo p/ texto
+                    const lowerOrRaw = item.isText ? raw.toLowerCase() : raw;
                     this.setState({ [item.nome]: lowerOrRaw });
-                
-                    // auto-sugestão inteligente para AdicionarItem no editar/remover
+
+                    // auto-sugestão (Editar/Remover)
                     if (item.nome === 'AdicionarItem' && (showInputEditar || showInputsRemover)) {
                       const q = this.normalize(lowerOrRaw);
-                
                       if (!q) {
                         this.setState({ dataGeralAlterarSug: [] });
                         return;
                       }
-                
                       const base = Array.isArray(this.dataAll) ? this.dataAll : [];
                       const words = q.split(/\s+/).filter(Boolean);
-                
+
                       const starts = [];
                       const allWords = [];
                       const includes = [];
-                
+
                       for (let i = 0; i < base.length; i++) {
                         const it = base[i];
                         const name = this.normalize(it?.item);
                         if (!name) continue;
-                
-                        // começa com QUALQUER palavra
+
                         let matched = false;
                         for (const w of words) {
                           if (name.startsWith(w)) {
@@ -611,14 +634,12 @@ export default class EstoqueScreen extends React.Component {
                           }
                         }
                         if (matched) continue;
-                
-                        // contém TODAS as palavras (se houver >1)
+
                         if (words.length > 1 && words.every((w) => name.includes(w))) {
                           allWords.push(it);
                           continue;
                         }
-                
-                        // contém QUALQUER palavra
+
                         for (const w of words) {
                           if (name.includes(w)) {
                             includes.push(it);
@@ -626,20 +647,19 @@ export default class EstoqueScreen extends React.Component {
                           }
                         }
                       }
-                
-                      // junta por prioridade, removendo duplicados e limitando a 50
+
                       const seen = new Set();
                       const ranked = [];
                       for (const bucket of [starts, allWords, includes]) {
                         for (const it of bucket) {
-                          const key = it?.item ?? it; // se tiver id estável, use it.id aqui
+                          const key = it?.item ?? it;
                           if (!seen.has(key)) {
                             seen.add(key);
                             ranked.push(it);
                           }
                         }
                       }
-                
+
                       this.setState({ dataGeralAlterarSug: ranked.slice(0, 50) });
                     }
                   };
@@ -661,9 +681,15 @@ export default class EstoqueScreen extends React.Component {
                         this.state.AdicionarItem &&
                         !this.state.AdicionarEstoqueIdeal && (
                           <FlatList
-                            style={{ maxHeight: 180, marginTop: 8, borderWidth: 1, borderColor: '#ddd', borderRadius: 6 }}
+                            style={{
+                              maxHeight: 180,
+                              marginTop: 8,
+                              borderWidth: 1,
+                              borderColor: '#ddd',
+                              borderRadius: 6,
+                            }}
                             data={this.state.dataGeralAlterarSug || []}
-                            keyExtractor={(sug, i) => String(sug.item || i)}
+                            keyExtractor={(sug, i) => String(sug?.item ?? i)}
                             keyboardShouldPersistTaps="handled"
                             renderItem={({ item: sug }) => (
                               <TouchableOpacity
@@ -691,27 +717,29 @@ export default class EstoqueScreen extends React.Component {
                 }}
               />
             )}
-          {(showInputsAdicionar || showInputEditar || showInputsRemover) && (
-            <>
-              <View style={styles.ambosFooter}>
-            <View style={styles.ambosRow}>
-              <Switch
-                value={this.state.emAmbos}
-                onValueChange={(v)=>this.setState({ emAmbos: v })}
-              />
-              <Text style={styles.ambosLabel}>{`${titleEnviar} em ambos estoque`}</Text>
-            </View>
-          </View>
-            </>
-          )}
 
             {(showInputsAdicionar || showInputEditar || showInputsRemover) && (
-              <TouchableOpacity
-                style={styles.botaoEnviar}
-                onPress={() => this.setState({ titleEnv: titleEnviar }, this.emitEditar)}
-              >
-                <Text style={styles.textoBotaoEnviar}>{titleEnviar}</Text>
-              </TouchableOpacity>
+              <>
+                <View style={styles.ambosFooter}>
+                  <View style={styles.ambosRow}>
+                    <Switch
+                      value={this.state.emAmbos}
+                      onValueChange={(v) => this.setState({ emAmbos: v })}
+                    />
+                    <Text style={styles.ambosLabel}>{`${titleEnviar || 'Ação'} em ambos estoque`}</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.botaoEnviar, sending && styles.btnDisabled]}
+                  onPress={() => !sending && this.setState({ titleEnv: titleEnviar }, this.emitEditar)}
+                  disabled={sending}
+                >
+                  <Text style={styles.textoBotaoEnviar}>
+                    {sending ? 'Enviando…' : titleEnviar}
+                  </Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         </Modal>
@@ -799,10 +827,13 @@ export default class EstoqueScreen extends React.Component {
           </View>
         </Modal>
 
+        {/* FAB */}
         {showAdicionar && (
           <TouchableOpacity
-            style={styles.buttonAdicionar}
-            onPress={() => this.setState({ showAdicionar: false })}
+            style={[styles.buttonAdicionar, sending && styles.btnDisabled]}
+            onPress={() => !sending && this.setState({ showAdicionar: false })}
+            activeOpacity={0.85}
+            disabled={sending}
           >
             <Text style={styles.buttonTexto}>+</Text>
           </TouchableOpacity>
@@ -818,8 +849,9 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     backgroundColor: '#f7fafc',
-    marginBlockEnd: 50,
+    paddingBottom: 50, // compat RN (evita marginBlockEnd)
   },
+
   tableHeader: {
     backgroundColor: '#17315c',
     borderRadius: 14,
@@ -834,16 +866,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     justifyContent: 'space-between',
-    gap: 6,
   },
-  headerText: {
-    fontSize: 19,
-    fontWeight: 'bold',
-    color: '#fff',
-    flex: 2.2,
-    letterSpacing: 1.1,
-  },
-  headerSearchBox: { flex: 2.2, marginHorizontal: 5 },
+
+  headerSearchBox: { flex: 2.2, marginRight: 8 },
+  label: { color: '#fff', marginBottom: 6, fontWeight: '600' },
+
   inputEstoque: {
     height: 38,
     backgroundColor: '#fff',
@@ -852,8 +879,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 9,
     fontSize: 15,
-    marginVertical: 2,
   },
+
   filterButton: {
     backgroundColor: '#ffc43d',
     paddingHorizontal: 11,
@@ -868,11 +895,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     letterSpacing: 0.7,
   },
-  actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 3 },
-  actionBtn: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 7, marginLeft: 4, backgroundColor: '#35a7ff', elevation: 1 },
+
+  actionButtons: { flexDirection: 'row', alignItems: 'center' },
+  actionBtn: {
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 7,
+    marginLeft: 6,
+    backgroundColor: '#35a7ff',
+    elevation: 1,
+  },
   actionBtnCancel: { backgroundColor: '#e34242' },
   actionBtnConfirm: { backgroundColor: '#3bb273' },
   actionBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 12.5, letterSpacing: 0.5 },
+  btnDisabled: { opacity: 0.6 },
 
   // linha da lista
   tableRow: {
@@ -887,19 +923,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 2,
-    gap: 14,
   },
   itemText: { flex: 2, fontSize: 17, fontWeight: '600', color: '#34445d', marginRight: 8 },
+
   valueColumn: { alignItems: 'center', flex: 1, justifyContent: 'center' },
-  valueRowSimples: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28 },
+  valueRowSimples: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' },
 
-  quantidade: { fontSize: 18, fontWeight: '700', color: 'blue', textAlign: 'center', marginHorizontal: 8 },
-  estoque_ideal: { fontSize: 18, fontWeight: '600', color: '#34445d', textAlign: 'center', marginHorizontal: 8 },
-  diffEstoque: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', color: 'green', marginHorizontal: 8 },
+  quantidade: { fontSize: 18, fontWeight: '700', color: '#1f5eff', textAlign: 'center' },
+  estoque_ideal: { fontSize: 18, fontWeight: '600', color: '#34445d', textAlign: 'center' },
+  diffEstoque: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', color: '#10B981' },
 
-  editRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  editRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' },
   input: {
-    width: 52,
+    width: 56,
     height: 40,
     textAlign: 'center',
     borderColor: '#bbb',
@@ -907,8 +943,19 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: '#f7fafd',
     fontSize: 18,
-    marginHorizontal: 4,
   },
+
+  stepBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  stepMinus: { backgroundColor: '#ef4444' },
+  stepPlus: { backgroundColor: '#17315c' },
+  stepTxt: { color: '#fff', fontSize: 18, fontWeight: '800' },
 
   // modal principal
   ModalHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#ccc' },
@@ -950,18 +997,20 @@ const styles = StyleSheet.create({
     bottom: 20,
     right: 20,
     alignItems: 'center',
-    backgroundColor: 'black',
+    justifyContent: 'center',
+    backgroundColor: '#111827',
     borderRadius: 100,
+    elevation: 3,
   },
-  buttonTexto: { fontSize: 40, fontWeight: 'Arial', paddingBottom: 4.2, color: 'white' },
+  buttonTexto: { fontSize: 40, paddingBottom: 4.2, color: 'white', fontWeight: '800' },
 
   // modal quantidade rápida
   qtyModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   qtyModalBox: { width: '88%', backgroundColor: '#fff', borderRadius: 12, padding: 16 },
   qtyModalTitle: { fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 12, color: '#222' },
   qtyInfoText: { textAlign: 'center', color: '#444' },
-  qtyToggleRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  qtyToggleBtn: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
+  qtyToggleRow: { flexDirection: 'row', marginTop: 12 },
+  qtyToggleBtn: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginHorizontal: 5 },
   qtyToggleBtnActive: { backgroundColor: '#17315c', borderColor: '#17315c' },
   qtyToggleText: { color: '#333', fontWeight: '600' },
   qtyToggleTextActive: { color: '#fff' },
@@ -973,46 +1022,9 @@ const styles = StyleSheet.create({
   qtyBtnCancel: { backgroundColor: '#6c757d' },
   qtyBtnOk: { backgroundColor: '#3bb273' },
   qtyBtnText: { color: '#fff', fontWeight: '700' },
-  ambosFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 8,    // encosta nos inputs
-    paddingBottom: 6,
-  },
-  
-  ambosRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  
-  checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: '#9aa3b2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  
-  checkboxChecked: {
-    borderColor: '#17315c',
-    backgroundColor: '#17315c',
-  },
-  
-  checkboxDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    backgroundColor: '#fff',
-  },
-  
-  ambosLabel: {
-    fontSize: 14.5,
-    color: '#2c3a4b',
-    fontWeight: '600',
-    textTransform: 'capitalize',
-  },
-  
+
+  // ambos
+  ambosFooter: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 6 },
+  ambosRow: { flexDirection: 'row', alignItems: 'center' },
+  ambosLabel: { fontSize: 14.5, color: '#2c3a4b', fontWeight: '600', textTransform: 'capitalize', marginLeft: 10 },
 });

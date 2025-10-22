@@ -29,6 +29,7 @@ import PricesManagement from './screens/promotionScreen.js';
 import { askBtPermissions } from './permissions.js';
 import { PrinterService } from './PrinterService.js';
 import OpcoesScreen from './screens/opcoesScreen.js';
+import HomeScreenCozinha from './screens/HomeScreenCozinha.js';
 
 const Drawer = createDrawerNavigator();
 const Stack = createStackNavigator();
@@ -67,6 +68,15 @@ function HomeStack() {
         }}
       />
       <Tab.Screen
+        name="pedidos"
+        component={PedidosScreen}
+        options={{
+          title: 'Pedidos',
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => <Icon name="list" color={color} size={size} />,
+        }}
+      />
+      <Tab.Screen
         name="barman"
         component={BarmanScreen}
         options={{
@@ -76,6 +86,39 @@ function HomeStack() {
         }}
       />
       <Tab.Screen
+        name="Cozinha"
+        component={Cozinha}
+        options={{
+          title: 'Cozinha',
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => <Icon name="cutlery" color={color} size={size} />,
+        }}
+      />
+      
+    </Tab.Navigator>
+  );
+}
+
+function CozinhaStack() {
+  return (
+    <Tab.Navigator initialRouteName="Cozinha">
+      <Tab.Screen
+        name="Cozinha"
+        component={Cozinha}
+        options={{
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => <Icon name="cutlery" color={color} size={size} />,
+        }}
+      />
+      <Tab.Screen
+      name='Anotar'
+      component={HomeScreenCozinha}
+      options={{
+        headerShown: false,
+        tabBarIcon: ({ color, size }) => <Icon name="pencil" color={color} size={size} />,
+      }}
+    />
+    <Tab.Screen
         name="pedidos"
         component={PedidosScreen}
         options={{
@@ -87,6 +130,7 @@ function HomeStack() {
     </Tab.Navigator>
   );
 }
+      
 
 function AnalytcsStack() {
   return (
@@ -123,9 +167,7 @@ function AuthNavigator() {
         user.cargo === 'ADM' ? (
           <Drawer.Navigator initialRouteName="Inicio">
             <Drawer.Screen name="Inicio" component={HomeStack} />
-            {/* Barman e Pedidos agora estão no Tab do HomeStack — removidos do Drawer */}
-            <Drawer.Screen name="Cozinha" component={Cozinha} />
-            <Drawer.Screen name="Pedidos" component={PedidosScreen} options={{ drawerItemStyle: { display: 'none' } }} />
+            {/* Barman e Pedidos comanda e cozinha agora estão no Tab do HomeStack — removidos do Drawer */}          
             <Drawer.Screen name="Cardapio" component={ScreenCardapio} />
             <Drawer.Screen name="Promocoes" component={PricesManagement} />
             <Drawer.Screen name="Estoque Carrinho" component={EstoqueScreen} />
@@ -136,13 +178,16 @@ function AuthNavigator() {
             <Drawer.Screen name="Cadastrar" component={Cadastro} />
             <Drawer.Screen name="LogOut" component={LogOut} />
           </Drawer.Navigator>
-        ) : (
+        ) : user.cargo !=='Cozinha'?(
           <Drawer.Navigator initialRouteName="Home">
             <Drawer.Screen name="Home" component={HomeStack} />
-            {/* Barman e Pedidos agora estão no Tab do HomeStack — removidos do Drawer */}
-            <Drawer.Screen name="Cozinha" component={Cozinha} />
-            <Drawer.Screen name="Cardapio" component={ScreenCardapio} />
+            {/* Barman e Pedidos comanda e cozinha agora estão no Tab do HomeStack — removidos do Drawer */}          
             <Drawer.Screen name="Estoque" component={EstoqueScreen} />
+            <Drawer.Screen name="LogOut" component={LogOut} />
+          </Drawer.Navigator>
+        ):(
+          <Drawer.Navigator initialRouteName="Cozinha">
+            <Drawer.Screen name="Cozinha" component={CozinhaStack} />
             <Drawer.Screen name="LogOut" component={LogOut} />
           </Drawer.Navigator>
         )

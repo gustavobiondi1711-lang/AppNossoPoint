@@ -38,7 +38,7 @@ export const PrinterService = {
     Alert.alert('Impressora', `Selecionada: ${name}\nMAC: ${mac}`);
   },
 
-  async printPedido({ mesa, pedido, quant, extra, hora, sendBy }) {
+  async printPedido({ mesa, pedido, quant, extra, hora, sendBy, remetente, endereco, prazo, opcoes }) {
     await loadThermal();
   
     const type = (await AsyncStorage.getItem(KEYS.TYPE)) || 'ble';
@@ -51,14 +51,16 @@ export const PrinterService = {
       '\x1B\x21\x00';    // reset
   
     // --- Detalhes médios ---
-    const detalhes =
-      '\x1B\x21\x10' +   // altura dupla (um pouco maior)
+    '\x1B\x21\x10' +   // altura dupla (um pouco maior)
       `Pedido: ${pedido}\n` +
       `Quant: ${quant}\n` +
       (extra ? `Extra: ${extra}\n` : '') +
       (opcoes? `Opções: ${opcoes}\n` : '') +
       `Hora: ${hora}\n` +
       `SendBy: ${sendBy}\n` +
+      `Remetente: ${remetente}\n` +
+      `endereço: ${endereco}\n` +
+      `prazo: ${prazo}\n` +
       '\x1B\x21\x00';    // reset
   
     // feed controlado (2 linhas no fim)
@@ -81,5 +83,6 @@ export const PrinterService = {
     await BLEPrinter.connectPrinter(mac);
     await BLEPrinter.printText(content, {});
   }
+
   
 };

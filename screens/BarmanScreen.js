@@ -8,32 +8,16 @@ import {
   RefreshControl,
   Modal,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
-import { API_URL } from "./url";
+import NetInfo from '@react-native-community/netinfo';
+import { API_URL } from './url';
 import { UserContext } from '../UserContext';
 import { PrinterService } from '../PrinterService';
 import { getSocket } from '../socket';
 
-const COLORS = {
-  bg: '#FFFFFF',
-  text: '#0A0A0A',
-  muted: '#444',
-  border: '#000',
-  card: '#FFFFFF',
-
-  // filtro (volta o antigo)
-  chipOn: '#111',
-  chipOff: '#E0E0E0',
-  chipTextOn: '#FFD600',
-
-  // ações
-  primary: '#1565C0',   // COMEÇAR
-  success: '#2E7D32',   // TERMINAR
-  danger:  '#C62828',   // DESFAZER
-};
-
 export default class BarmanScreen extends React.Component {
-  static contextType = UserContext
+  static contextType = UserContext;
 
   constructor(props) {
     super(props);
@@ -41,158 +25,44 @@ export default class BarmanScreen extends React.Component {
       data: [],
       data_filtrado: [],
       showFiltrado: true,
+
       ingredientes: [],
-      refreshing:false,
-      showModal:false,
+      refreshing: false,
+      showModal: false,
+      loadingIng: false,
+
+      // rede/controle
+      isConnected: true,
     };
+
     this.socket = null;
+
+    // timers/flags
+    this._isMounted = false;
+    this._netinfoUnsub = null;
+    this._refreshTimeout = null;
+
+    // fila e trava de impressão (sequencial)
+    this._printQueue = [];
+    this._printing = false;
+
+    // evita cliques múltiplos por item
+    this._rowBusyIds = new Set();
+
+    // binds
     this.refreshData = this.refreshData.bind(this);
     this.alterar_estado = this.alterar_estado.bind(this);
     this.filtrar = this.filtrar.bind(this);
     this.extra = this.extra.bind(this);
   }
 
-  componentDidMount() {
-    const { user } = this.context || {};
-    this.socket = getSocket();
-    this.socket.emit("getPedidos", false);
-    this.socket.on("respostaPedidos", this.handleRespostaPedidos);
-    this.socket.on("ingrediente", this.handleIngrediente);
-
-    if (user?.username === "gustavobiondi") {
-      this.processPendingPrintOrders();
-      this.socket.on("emitir_pedido_restante", this.handleEmitirPedidoRestante);
-    }
-  }
-
-  componentWillUnmount() {
-    if (this.socket) {
-      this.socket.off("respostaPedidos", this.handleRespostaPedidos);
-      this.socket.off("ingrediente", this.handleIngrediente);
-      this.socket.off("emitir_pedido_restante", this.handleEmitirPedidoRestante);
-    }
-  }
-
-  // ---------- handlers ----------
-  handleRespostaPedidos = (dados) => {
-    if (!dados?.dataPedidos) return;
-
-    const data_temp = dados.dataPedidos.filter((item) => item.categoria === "2");
-    const data_temp_filtrado = data_temp.filter((item) => item.estado !== "Pronto");
-
-    this.setState({
-      data: data_temp,
-      data_filtrado: data_temp_filtrado,
-    });
+  // ===== Util =====
+  safeSetState = (updater, cb) => {
+    if (!this._isMounted) return;
+    this.setState(updater, cb);
   };
 
-  handleIngrediente = ({ data }) => {
-    this.setState({ ingredientes: data });
-  };
-
-  handleEmitirPedidoRestante = async (data) => {
-    try {
-      await PrinterService.printPedido({
-        mesa: data.mesa,
-        pedido: data.pedido,
-        quant: data.quantidade,
-        opcoes: data.opcoes,
-        extra: data.extra,
-        hora: data.hora,
-        sendBy: data.sendBy,
-      });
-
-      await fetch(`${API_URL}/updatePrinted`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pedidoId: data.id }),
-      });
-    } catch (e) {
-      console.log("Erro ao imprimir:", e);
-    }
-  };
-
-  // ---------- fluxo inicial de impressões pendentes ----------
-  processPendingPrintOrders = async () => {
-    try {
-      const resp = await fetch(`${API_URL}/getPendingPrintOrders`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ printed: 0, ordem: 0 }),
-      });
-
-      const text = await resp.text();
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} :: ${text}`);
-
-      let data;
-      try { data = JSON.parse(text); }
-      catch { throw new Error(`Resposta não-JSON do servidor: ${text.slice(0, 300)}`); }
-
-      for (const order of data.pedidos || []) {
-        try {
-          await PrinterService.printPedido({
-            mesa: order.mesa,
-            pedido: order.pedido,
-            quant: order.quantidade,
-            opcoes: order.opcoes,
-            extra: order.extra,
-            hora: order.hora,
-            sendBy: order.sendBy,
-          });
-          const upd = await fetch(`${API_URL}/updatePrinted`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pedidoId: order.id }),
-          });
-          if (!upd.ok) {
-            const errText = await upd.text();
-            console.error(`Falha ao marcar impresso (id=${order.id}): ${upd.status} ${upd.statusText} :: ${errText}`);
-          }
-        } catch (e) {
-          console.log("Erro ao imprimir:", e);
-        }
-      }
-    } catch (error) {
-      console.error("Erro ao buscar pedidos pendentes de impressão:", error);
-    }
-  };
-
-  // ---------- refresh ----------
-  refreshData = () => {
-    this.setState({ refreshing: true }, () => {
-      this.socket.emit("getPedidos", false);
-      this.setState({ refreshing: false });
-    });
-  };
-
-  alterar_estado(id, estado) {
-    this.socket.emit('inserir_preparo', { id, estado });
-  }
-
-  filtrar = () => {
-    this.setState(prevState => ({ showFiltrado: !prevState.showFiltrado }));
-  }
-
-  // Modal ingredientes
-  extra(index) {
-    const { data_filtrado, data } = this.state;
-    const list = this.state.showFiltrado ? data_filtrado : data;
-    this.setState(prev => ({ showModal: !prev.showModal }));
-    this.socket.emit('get_ingredientes', { ingrediente: list[index].pedido});
-  }
-  GROUP_PALETTE = [
-    '#E6F4FF', // azul claro
-    '#E8F5E9', // verde claro
-    '#FFF3E0', // laranja claro
-    '#F3E5F5', // roxo claro
-    '#E0F2F1', // teal claro
-    '#FFF9C4', // amarelo claro
-    '#FCE4EC', // rosa claro
-    '#EDE7F6', // lilás claro
-    '#DCEDC8', // verde lima claro
-    '#FFECB3', // âmbar claro
-  ];
-  
+  // normaliza chaves
   normalizeKey = (s) =>
     String(s || '')
       .toLowerCase()
@@ -200,223 +70,464 @@ export default class BarmanScreen extends React.Component {
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
-  
-  /** chave do grupo = pedido + extra (normalizados) */
+
+  /** chave do grupo = pedido + extra + opcoes (normalizados) */
   getGroupKey = (item) => {
     const p = this.normalizeKey(item.pedido);
-    const i  = this.normalizeKey(item.opcoes);
+    const i = this.normalizeKey(item.opcoes);
     const e = this.normalizeKey(item.extra);
     return `${p}|${e}|${i}`;
   };
- // Aceita string JSON, objeto único ou array de grupos.
-// Retorna "Grupo: opt1, opt2 | Outro: optA, optB" (sem preços e sem prefixo "Opções:")
-formatOpcoesText = (raw) => {
-  if (!raw) return '';
-  let data;
-  try {
-    data = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-  } catch {
-    return '';
-  }
 
-  // Normaliza para array de grupos
-  let groups = [];
-  if (Array.isArray(data)) {
-    groups = data;
-  } else if (data && typeof data === 'object') {
-    // caso: um único grupo { nome, options, ... }
-    if (Array.isArray(data.options)) groups = [data];
-  }
-  if (!groups.length) return '';
+  // Aceita string JSON, objeto único ou array de grupos.
+  // Retorna "Grupo: opt1, opt2 | Outro: optA, optB"
+  formatOpcoesText = (raw) => {
+    if (!raw) return '';
+    let data;
+    try {
+      data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      return '';
+    }
+    let groups = [];
+    if (Array.isArray(data)) groups = data;
+    else if (data && typeof data === 'object' && Array.isArray(data.options)) groups = [data];
+    if (!groups.length) return '';
 
-  const parts = groups.map((g) => {
-    const groupName = (g && g.nome) ? String(g.nome).trim() : '';
-    const opts = (g && Array.isArray(g.options) ? g.options : [])
-      .map(o => (o && String(o.nome || '').trim()))
-      .filter(Boolean);               // ignora opção sem nome
-    if (!opts.length) return '';
-    const optsTxt = opts.join(', ');
-    return groupName ? `${groupName}: ${optsTxt}` : optsTxt;
-  }).filter(Boolean);
+    const parts = groups
+      .map((g) => {
+        const groupName = g?.nome ? String(g.nome).trim() : '';
+        const opts = (Array.isArray(g?.options) ? g.options : [])
+          .map((o) => (o && String(o.nome || '').trim()))
+          .filter(Boolean);
+        if (!opts.length) return '';
+        const optsTxt = opts.join(', ');
+        return groupName ? `${groupName}: ${optsTxt}` : optsTxt;
+      })
+      .filter(Boolean);
 
-  return parts.join(' | ');
-};
+    return parts.join(' | ');
+  };
 
-
-
-
-  /** 
-   * Gera contagem e cor por grupo.
-   * countMode: 'rows' (nº de linhas iguais) ou 'qty' (soma de item.quantidade)
-   */
-  buildGroupInfo = (list, countMode = 'rows') => {
+  /** Contagem por grupo (sem cores dinâmicas) */
+  buildGroupCounts = (list, countMode = 'rows') => {
     const counts = {};
-    const colorByKey = {};
-    let colorIdx = 0;
-  
     for (const it of list) {
       const key = this.getGroupKey(it);
       if (!(key in counts)) counts[key] = 0;
       counts[key] += countMode === 'qty' ? Number(it.quantidade || 0) : 1;
-  
-      if (!colorByKey[key]) {
-        colorByKey[key] = this.GROUP_PALETTE[colorIdx % this.GROUP_PALETTE.length];
-        colorIdx++;
+    }
+    return counts;
+  };
+
+  // ===== Ciclo de vida =====
+  async componentDidMount() {
+    this._isMounted = true;
+
+    // monitor de rede
+    this._netinfoUnsub = NetInfo.addEventListener((state) => {
+      const now = !!state.isConnected;
+      if (now !== this.state.isConnected) {
+        this.safeSetState({ isConnected: now });
+      }
+    });
+
+    try {
+      const net = await NetInfo.fetch();
+      this.safeSetState({ isConnected: !!net.isConnected });
+    } catch {}
+
+    // socket
+    const { user } = this.context || {};
+    this.socket = getSocket();
+
+    if (this.socket) {
+      this.socket.emit('getPedidos', false);
+      this.socket.on('respostaPedidos', this.handleRespostaPedidos);
+      this.socket.on('ingrediente', this.handleIngrediente);
+
+      if (user?.username === 'gustavobiondi') {
+        // fila de impressão pendente
+        await this.processPendingPrintOrders();
+        // imprime novos "restantes" via fila
+        this.socket.on('emitir_pedido_restante', this.handleEmitirPedidoRestante);
       }
     }
-    return { counts, colorByKey };
+  }
+
+  componentWillUnmount() {
+    this._isMounted = false;
+
+    if (this._netinfoUnsub) {
+      this._netinfoUnsub();
+      this._netinfoUnsub = null;
+    }
+    if (this._refreshTimeout) {
+      clearTimeout(this._refreshTimeout);
+      this._refreshTimeout = null;
+    }
+
+    if (this.socket) {
+      this.socket.off('respostaPedidos', this.handleRespostaPedidos);
+      this.socket.off('ingrediente', this.handleIngrediente);
+      this.socket.off('emitir_pedido_restante', this.handleEmitirPedidoRestante);
+    }
+  }
+
+  // ===== Handlers de socket =====
+  handleRespostaPedidos = (dados) => {
+    if (!dados?.dataPedidos) {
+      // encerra refresh se estava ativo
+      if (this.state.refreshing) this.safeSetState({ refreshing: false });
+      return;
+    }
+
+    const data_temp = dados.dataPedidos.filter((item) => item.categoria === '2');
+    const data_temp_filtrado = data_temp.filter((item) => item.estado !== 'Pronto');
+
+    this.safeSetState({
+      data: data_temp,
+      data_filtrado: data_temp_filtrado,
+      refreshing: false,
+    });
   };
-  
-  // ---------- helpers de UI ----------
+
+  handleIngrediente = ({ data }) => {
+    // conteúdo do modal de ingredientes recebido do backend
+    this.safeSetState({ ingredientes: data || [], loadingIng: false });
+  };
+
+  handleEmitirPedidoRestante = async (data) => {
+    // Enfileira para impressão sequencial
+    if (!data) return;
+    this._enqueuePrintJob({
+      id: data.id,
+      mesa: data?.mesa ?? data?.comanda ?? '',
+      pedido: data?.pedido || '',
+      quant: data?.quantidade || null,
+      opcoes: data?.opcoes || null,
+      extra: data?.extra || null,
+      hora: data?.hora || null,
+      remetente: data?.remetente || null,
+      endereco: data?.endereco_entrega || null,
+      prazo: data?.prazo || null,
+      sendBy: data?.sendBy || null,
+      shouldUpdatePrinted: true,
+    });
+  };
+
+  // ===== Fila de impressão =====
+  _enqueuePrintJob(job) {
+    this._printQueue.push(job);
+    this._drainPrintQueue();
+  }
+
+  async _drainPrintQueue() {
+    if (this._printing) return;
+    this._printing = true;
+    try {
+      while (this._printQueue.length > 0 && this._isMounted) {
+        const job = this._printQueue.shift();
+        try {
+          await PrinterService.printPedido({
+            mesa: job.mesa,
+            pedido: job.pedido,
+            quant: job.quant,
+            opcoes: job.opcoes,
+            extra: job.extra,
+            hora: job.hora,
+            remetente: job.remetente,
+            endereco: job.endereco,
+            prazo: job.prazo,
+            sendBy: job.sendBy,
+          });
+
+          if (job.shouldUpdatePrinted && job.id != null) {
+            try {
+              const upd = await fetch(`${API_URL}/updatePrinted`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pedidoId: job.id }),
+              });
+              if (!upd.ok) {
+                const errText = await upd.text();
+                console.error(
+                  `Falha ao marcar impresso (id=${job.id}): ${upd.status} ${upd.statusText} :: ${errText}`,
+                );
+              }
+            } catch (e) {
+              console.error('Erro ao atualizar status de impressão:', e);
+            }
+          }
+        } catch (err) {
+          console.error('Erro ao imprimir:', err);
+          // continua drenando a fila mesmo em erro
+        }
+      }
+    } finally {
+      this._printing = false;
+    }
+  }
+
+  // Busca e imprime pendências (sequencial + robusto)
+  processPendingPrintOrders = async () => {
+    // checa rede antes
+    try {
+      const net = await NetInfo.fetch();
+      if (!net.isConnected) return; // sem internet, silencia
+    } catch {}
+
+    try {
+      const resp = await fetch(`${API_URL}/getPendingPrintOrders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printed: 0, ordem: 0 }),
+      });
+
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} :: ${text}`);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`Resposta não-JSON do servidor: ${text.slice(0, 300)}`);
+      }
+
+      const list = Array.isArray(parsed?.pedidos) ? parsed.pedidos : [];
+      for (const order of list) {
+        // enfileira — e deixa a fila drenar
+        this._enqueuePrintJob({
+          id: order.id,
+          mesa: order?.mesa ?? order?.comanda ?? '',
+          pedido: order?.pedido || '',
+          quant: order?.quantidade || null,
+          opcoes: order?.opcoes || null,
+          extra: order?.extra || null,
+          hora: order?.hora || null,
+          remetente: order?.remetente || null,
+          endereco: order?.endereco_entrega || null,
+          prazo: order?.prazo || null,
+          sendBy: order?.sendBy || null,
+          shouldUpdatePrinted: true,
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao buscar pedidos pendentes de impressão:', error);
+    }
+  };
+
+  // ===== Refresh =====
+  refreshData = () => {
+    if (!this.socket) return;
+    this.safeSetState({ refreshing: true }, () => {
+      this.socket.emit('getPedidos', false);
+      // fallback para nunca travar o spinner se nada voltar
+      if (this._refreshTimeout) clearTimeout(this._refreshTimeout);
+      this._refreshTimeout = setTimeout(() => {
+        this.safeSetState({ refreshing: false });
+      }, 7000);
+    });
+  };
+
+  // ===== Ações =====
+  alterar_estado(id, estado) {
+    if (!this.socket) return;
+    if (id == null) return;
+
+    // evita spam no botão desta linha
+    if (this._rowBusyIds.has(id)) return;
+    this._rowBusyIds.add(id);
+
+    try {
+      // pode-se adaptar para usar ACK do socket se disponível
+      this.socket.emit('inserir_preparo', { id, estado });
+    } finally {
+      // libera após pequeno intervalo para evitar clique duplo
+      setTimeout(() => {
+        this._rowBusyIds.delete(id);
+        // re-carrega para refletir estado atualizado
+        this.refreshData();
+      }, 800);
+    }
+  }
+
+  filtrar = () => {
+    this.safeSetState((prevState) => ({ showFiltrado: !prevState.showFiltrado }));
+  };
+
+  // Modal ingredientes — evita acesso por índice (lista muda). Recebe o item diretamente.
+  extra(item) {
+    const pedidoNome = item?.pedido;
+    if (!pedidoNome) return;
+
+    this.safeSetState({ showModal: true, loadingIng: true, ingredientes: [] }, () => {
+      if (this.socket) {
+        this.socket.emit('get_ingredientes', { ingrediente: pedidoNome });
+      } else {
+        this.safeSetState({ loadingIng: false });
+      }
+    });
+  }
+
+  // ===== UI helpers =====
   actionForEstado = (estado) => {
-    if (estado === 'Em Preparo')
-      return { label: 'TERMINAR', bg: COLORS.success, txt: '#fff', next: 'Pronto' };
-    if (estado === 'A Fazer')
-      return { label: 'COMEÇAR',  bg: COLORS.primary, txt: '#fff', next: 'Em Preparo' };
-    return { label: 'DESFAZER',   bg: COLORS.danger,  txt: '#fff', next: 'A Fazer' };
+    if (estado === 'Em Preparo') return { label: 'TERMINAR', bg: '#059669', txt: '#fff', next: 'Pronto' };
+    if (estado === 'A Fazer') return { label: 'COMEÇAR', bg: '#17315c', txt: '#fff', next: 'Em Preparo' };
+    return { label: 'DESFAZER', bg: '#DC2626', txt: '#fff', next: 'A Fazer' };
   };
-  
-  
 
   renderHeader = () => (
     <View style={styles.headerBar}>
-      <Text style={styles.headerTitle}>BARMAN • PEDIDOS</Text>
+      <Text style={styles.headerTitle}>Barman • Pedidos</Text>
       <TouchableOpacity
         onPress={this.filtrar}
         activeOpacity={0.9}
-        style={[styles.toggle, this.state.showFiltrado ? styles.toggleOn : styles.toggleOff]}
+        style={[styles.toggleBtn, this.state.showFiltrado ? styles.toggleActive : null]}
       >
-        <Text style={this.state.showFiltrado ? styles.toggleTextOn : styles.toggleTextOff}>
+        <Text style={[styles.toggleText, this.state.showFiltrado ? styles.toggleTextActive : null]}>
           {this.state.showFiltrado ? 'Todos' : 'Filtrar'}
         </Text>
       </TouchableOpacity>
     </View>
   );
 
-
-
-  renderItem = ({ item, index }) => {
+  renderItem = ({ item }) => {
     const a = this.actionForEstado(item.estado);
-  
     const key = this.getGroupKey(item);
-    const groupColor = this._groupMeta?.colorByKey?.[key] || '#FFF';
-    const dupeCount = this._groupMeta?.counts?.[key] || 1;
-  
+    const dupeCount = this._groupCounts?.[key] || 1;
+
+    const rowBusy = this._rowBusyIds.has(item.id);
+
     return (
       <View style={styles.cardRow}>
-        {/* bolha de quantidade + bolinha de duplicados */}
+        {/* bolha quantidade + badge de duplicados */}
         <View style={styles.qtyWrap}>
-          <View style={[styles.qtyBubble, { backgroundColor: groupColor }]}>
+          <View style={styles.qtyBubble}>
             <Text style={styles.qtyText}>{item.quantidade}</Text>
           </View>
-  
           {dupeCount > 1 && (
-            <View style={[styles.dupeDot, { backgroundColor: groupColor }]}>
+            <View style={styles.dupeDot}>
               <Text style={styles.dupeText}>{dupeCount}</Text>
             </View>
           )}
         </View>
-  
+
         <View style={styles.middleCol}>
           <Text style={styles.itemName} numberOfLines={1}>
             {item.pedido}
           </Text>
-          
+
           {(() => {
-              const opcoesFmt = this.formatOpcoesText(item.opcoes);
-              const hasOpcoes = !!opcoesFmt;
-              const extraTxt = (item.extra || '').trim();
-              const hasExtra = !!extraTxt;
+            const opcoesFmt = this.formatOpcoesText(item.opcoes);
+            const hasOpcoes = !!opcoesFmt;
+            const extraTxt = (item.extra || '').trim();
+            const hasExtra = !!extraTxt;
 
-              if (!hasOpcoes && !hasExtra) return null;
+            if (!hasOpcoes && !hasExtra) return null;
 
-              return (
-                <Text style={styles.itemExtra}>
-                  {hasOpcoes ? opcoesFmt : ''}
-                  {hasOpcoes && hasExtra ? ' • ' : ''}
-                  {hasExtra ? `${extraTxt}` : ''}
-                </Text>
-              );
-            })()}
+            return (
+              <Text style={styles.itemExtra}>
+                {hasOpcoes ? opcoesFmt : ''}
+                {hasOpcoes && hasExtra ? ' • ' : ''}
+                {hasExtra ? `${extraTxt}` : ''}
+              </Text>
+            );
+          })()}
 
-  
-          <Text style={styles.comandaText}>
-            Comanda {item.comanda}
-          </Text>
+          <Text style={styles.comandaText}>Comanda {item.comanda}</Text>
         </View>
-  
+
         <View style={styles.rightCol}>
           <Text style={styles.timeText}>{item.inicio}</Text>
-  
+
           <TouchableOpacity
-            style={styles.infoBtn}
-            onPress={() => this.extra(index)}
+            style={[styles.btn, styles.btnOutlineSm]}
+            onPress={() => this.extra(item)}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            <Text style={styles.infoBtnText}>DETALHES</Text>
+            <Text style={styles.btnOutlineSmText}>Detalhes</Text>
           </TouchableOpacity>
-  
+
           <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: a.bg }]}
-            onPress={() => this.alterar_estado(item.id, a.next)}
-            activeOpacity={0.85}
+            style={[
+              styles.btn,
+              styles.btnAction,
+              { backgroundColor: a.bg, opacity: rowBusy ? 0.6 : 1 },
+            ]}
+            onPress={() => !rowBusy && this.alterar_estado(item.id, a.next)}
+            activeOpacity={0.9}
           >
-            <Text style={[styles.actionText, { color: a.txt }]}>{a.label}</Text>
+            <Text style={styles.btnActionText}>{rowBusy ? '...' : a.label}</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   };
-  
 
   render() {
     const dataToShow = this.state.showFiltrado ? this.state.data_filtrado : this.state.data;
-    const { refreshing, showModal, ingredientes } = this.state;
-    const groupMeta = this.buildGroupInfo(dataToShow, 'rows'); // ou 'qty'
-    this._groupMeta = groupMeta; // disponibiliza para renderItem
+    const { refreshing, showModal, ingredientes, loadingIng } = this.state;
+
+    // recomputa contagem por grupo
+    this._groupCounts = this.buildGroupCounts(dataToShow, 'rows');
 
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-
+        <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
         {this.renderHeader()}
 
         <FlatList
           data={dataToShow}
-          keyExtractor={(item, index) => String(item.id ?? index)}
+          keyExtractor={(item, index) => String(item?.id ?? index)}
           renderItem={this.renderItem}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={this.refreshData} />}
           contentContainerStyle={{ paddingBottom: 24 }}
+          initialNumToRender={12}
+          windowSize={7}
+          removeClippedSubviews
         />
 
         <Modal
           animationType="slide"
           transparent
           visible={showModal}
-          onRequestClose={() => this.setState({ showModal: false })}
+          onRequestClose={() => this.safeSetState({ showModal: false, ingredientes: [], loadingIng: false })}
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Ingredientes</Text>
-              <FlatList
-                data={ingredientes}
-                keyExtractor={(item, index) => index.toString()}
-                renderItem={({ item }) => (
-                  <View style={styles.ingRow}>
-                    <Text style={styles.ingKey}>{item.key}</Text>
-                    <Text style={styles.ingSep}>:</Text>
-                    <Text style={styles.ingVal}>{item.dado}</Text>
-                  </View>
-                )}
-              />
-              <TouchableOpacity
-                style={styles.closeButton}
-                onPress={() => this.setState({ showModal: false, ingredientes: [] })}
-              >
-                <Text style={styles.closeText}>FECHAR</Text>
-              </TouchableOpacity>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Ingredientes</Text>
+                <TouchableOpacity
+                  onPress={() => this.safeSetState({ showModal: false, ingredientes: [], loadingIng: false })}
+                  style={styles.modalCloseBtn}
+                >
+                  <Text style={styles.modalCloseIcon}>×</Text>
+                </TouchableOpacity>
+              </View>
+
+              {loadingIng ? (
+                <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" />
+                </View>
+              ) : (
+                <FlatList
+                  data={Array.isArray(ingredientes) ? ingredientes : []}
+                  keyExtractor={(item, index) => index.toString()}
+                  renderItem={({ item }) => (
+                    <View style={styles.ingRow}>
+                      <Text style={styles.ingKey}>{item?.key}</Text>
+                      <Text style={styles.ingSep}>:</Text>
+                      <Text style={styles.ingVal}>{item?.dado}</Text>
+                    </View>
+                  )}
+                  ListEmptyComponent={
+                    <Text style={{ textAlign: 'center', color: '#6B7280', paddingVertical: 8 }}>
+                      Sem detalhes para este item.
+                    </Text>
+                  }
+                />
+              )}
             </View>
           </View>
         </Modal>
@@ -426,206 +537,58 @@ formatOpcoesText = (raw) => {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-    paddingHorizontal: 10,
-    paddingTop: 8,
-  },
+  // layout base
+  container: { flex: 1, backgroundColor: '#fff' },
 
-  // Header
+  // header
   headerBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    borderBottomWidth: 2,
-    borderColor: COLORS.border,
-    marginBottom: 6,
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.text,
-  },
-  toggle: {
-    borderWidth: 2,
-    borderColor: COLORS.border,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-  toggleOn: { backgroundColor: COLORS.chipOn, borderColor: COLORS.border },
-  toggleOff:{ backgroundColor: COLORS.chipOff, borderColor: COLORS.border },
-  toggleTextOn:  { color: COLORS.chipTextOn, fontWeight: '900' },
-  toggleTextOff: { color: COLORS.text,      fontWeight: '900' },
-
-  // Columns header
-  columns: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 2,
-    borderColor: COLORS.border,
-    backgroundColor: '#F6F6F6',
-    marginBottom: 6,
-  },
-  colText: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: COLORS.text,
-  },
-  colPedido: { flex: 1 },
-  colHora: { width: 88, textAlign: 'center' },
-  colAcao: { width: 104, textAlign: 'right' },
-
-  // ROW/CARD mais compacto
-cardRow: {
-  flexDirection: 'row',
-  alignItems: 'flex-start',     // permite múltiplas linhas no meio
-  backgroundColor: COLORS.card,
-  borderWidth: 2,
-  borderColor: COLORS.border,
-  borderRadius: 10,
-  padding: 6,                   // antes 10
-  marginBottom: 6,              // antes 10
-},
-
-
-qtyText: { fontSize: 18, fontWeight: '900', color: COLORS.text }, // antes 20
-
-middleCol: {
-  flex: 1,
-  justifyContent: 'center',
-  paddingRight: 6,              // antes 8
-},
-
-itemName: {
-  fontSize: 17,                 // antes 18
-  fontWeight: '900',
-  color: COLORS.text,
-  marginBottom: 2,
-},
-
-itemExtra: {
-  fontSize: 13,                 // antes 14
-  fontWeight: '700',
-  color: 'blue',
-  marginBottom: 2,
-  flexWrap: 'wrap',             // permite quebrar linha
-  lineHeight: 17,
-},
-
-comandaText: {
-  fontSize: 13,                 // estava 14
-  fontWeight: '800',
-  color: COLORS.text,
-  lineHeight: 16,
-},
-
-rightCol: {
-  width: 104,                   // antes 120 (ganha espaço p/ texto)
-  alignItems: 'flex-end',
-  justifyContent: 'space-between',
-},
-
-timeText: {
-  fontSize: 14,                 // antes 16
-  fontWeight: '900',
-  color: COLORS.text,
-  marginBottom: 6,
-},
-
-infoBtn: {
-  backgroundColor: '#FFF',
-  borderWidth: 2,
-  borderColor: COLORS.border,
-  paddingVertical: 5,           // antes 6
-  paddingHorizontal: 8,         // antes 10
-  borderRadius: 10,
-  marginBottom: 6,              // antes 8
-},
-infoBtnText: {
-  fontSize: 12,
-  fontWeight: '900',
-  color: COLORS.text,
-  letterSpacing: 0.5,
-},
-
-actionBtn: {
-  borderRadius: 10,
-  paddingVertical: 8,           // antes 10
-  paddingHorizontal: 8,
-  minWidth: 100,                // antes 110
-  borderWidth: 2,
-  borderColor: COLORS.border,
-},
-actionText: {
-  fontSize: 13.5,               // antes 14
-  fontWeight: '900',
-  textAlign: 'center',
-  letterSpacing: 0.5,
-},
-
-  
-//modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-  },
-  modalContent: {
-    width: '86%',  // menor
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.border,
-    padding: 16,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    marginBottom: 10,
-    color: COLORS.text,
-    textAlign: 'center',
-  },
-  ingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-  },
-  ingKey: { width: 120, fontWeight: '800', color: COLORS.text, fontSize: 15 },
-  ingSep: { width: 12, textAlign: 'center', color: COLORS.text },
-  ingVal: { flex: 1, fontSize: 15, color: COLORS.text },
-  closeButton: {
-    marginTop: 14,
-    backgroundColor: '#FFF4B2',
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderColor: '#e5e7eb',
+    flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.border,
+    backgroundColor: '#f8fafc',
   },
-  closeText: { color: COLORS.text, fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
-  qtyWrap: {
-    position: 'relative',
-    marginRight: 8,
+  headerTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: '#111827' },
+  toggleBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#fff',
   },
+  toggleActive: { backgroundColor: '#17315c', borderColor: '#17315c' },
+  toggleText: { color: '#374151', fontWeight: '800' },
+  toggleTextActive: { color: '#fff' },
+
+  // linhas/cartões
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 12,
+    marginTop: 10,
+  },
+
+  // coluna esquerda: quantidade + duplicados
+  qtyWrap: { position: 'relative', marginRight: 10 },
   qtyBubble: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFF', // será sobrescrito pela cor do grupo
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
+  qtyText: { fontSize: 16, fontWeight: '900', color: '#111827' },
   dupeDot: {
     position: 'absolute',
     right: -6,
@@ -633,15 +596,104 @@ actionText: {
     width: 22,
     height: 22,
     borderRadius: 11,
-    borderWidth: 2,
-    borderColor: '#000',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
   },
-  dupeText: {
+  dupeText: { fontSize: 12, fontWeight: '800', color: '#111827' },
+
+  // coluna do meio
+  middleCol: { flex: 1, paddingRight: 6 },
+  itemName: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 2 },
+  itemExtra: { fontSize: 13, color: '#374151', marginBottom: 2, flexWrap: 'wrap', lineHeight: 18 },
+  comandaText: { fontSize: 13, fontWeight: '700', color: '#111827' },
+
+  // coluna direita
+  rightCol: { width: 116, alignItems: 'flex-end' },
+  timeText: { fontSize: 13, fontWeight: '800', color: '#374151', marginBottom: 8 },
+
+  // botões
+  btn: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 100,
+  },
+  btnOutlineSm: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#9ca3af',
+    marginBottom: 8,
+  },
+  btnOutlineSmText: { color: '#111827', fontWeight: '800' },
+
+  btnAction: { marginTop: 0 },
+  btnActionText: { color: '#fff', fontWeight: '800' },
+
+  // modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    width: '92%',
+    maxWidth: 520,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderColor: '#e5e7eb',
+    paddingBottom: 6,
+  },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
+  },
+  modalCloseIcon: { fontSize: 20, fontWeight: '800', color: '#111827', marginTop: -2 },
+
+  ingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  ingKey: {
+    width: 72,
     fontSize: 12,
-    fontWeight: '900',
-    color: '#000',
+    fontWeight: '600',
+    color: '#6B7280',
+    textAlign: 'right',
+    paddingRight: 6,
   },
-  
+  ingSep: {
+    width: 10,
+    textAlign: 'center',
+    color: '#9CA3AF',
+    marginTop: 1,
+  },
+  ingVal: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    color: '#111827',
+  },
 });
