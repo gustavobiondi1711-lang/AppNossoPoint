@@ -90,6 +90,7 @@ def validate_table_number_on_qr():
     print('tablenumver',tableNumber)
     if 1 <= tableNumber <= 80:
         return jsonify({'valid': True,'tableNumber':tableNumber}), 200
+    return jsonify({'valid': False}), 200
 
 
 
@@ -249,7 +250,7 @@ def guardar_login():
     return jsonify({"authToken": token}), 200
 
 
-@app.route('/salvarTokenCarg"o', methods=['POST'])
+@app.route('/salvarTokenCargo', methods=['POST'])
 def salvarTokenCargo():
     data = request.get_json()
     username = data.get('username')
