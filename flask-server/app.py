@@ -32,8 +32,8 @@ import os, io, base64, re, unicodedata
 
 
 from werkzeug.utils import secure_filename
-var = False
-manipule = False
+var = True
+manipule = True
 if manipule:
     subprocess.run(['python','manipule.py'])
 
@@ -3484,5 +3484,5 @@ def gerar_qr():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8000))
 
-    socketio.run(app, host='0.0.0.0', port=port, debug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
 
