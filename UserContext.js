@@ -57,7 +57,7 @@ function useClickGuards() {
 }
 
 // ===== Tipagem básica (JS)
-const defaultUser = { username: '', cargo: '', token: '', expiresAt: null };
+const defaultUser = { username: '', cargo: '', carrinho: '', token: '', expiresAt: null };
 
 // Create the User Context
 export const UserContext = createContext({
@@ -134,6 +134,7 @@ export const UserProvider = ({ children }) => {
           setUser({
             username: savedUser.username || '',
             cargo: savedUser.cargo || '',
+            carrinho: savedUser.carrinho || '',
             token: savedUser.token || '',
             expiresAt: savedUser.expiresAt || null,
           });
@@ -156,6 +157,7 @@ export const UserProvider = ({ children }) => {
           const legacyUser = {
             username: legacyUsername,
             cargo: '',       // será preenchido após login no seu fluxo
+            carrinho: '',
             token: legacyToken,
             expiresAt: expMs || null,
           };
@@ -197,11 +199,11 @@ export const UserProvider = ({ children }) => {
   }, [user]);
 
   // ===== APIs públicas
-  const signIn = useCallback(async ({ username, cargo = '', token, expiresAt = null }) => {
+  const signIn = useCallback(async ({ username, cargo = '', carrinho = '', token, expiresAt = null }) => {
     if (!username || !token) {
       throw new Error('Credenciais inválidas para signIn.');
     }
-    const next = { username, cargo, token, expiresAt: expiresAt ? Number(expiresAt) : null };
+    const next = { username, cargo, carrinho, token, expiresAt: expiresAt ? Number(expiresAt) : null };
     setUser(next);
     setIsLoggedIn(true);
     scheduleAutoLogout(next.expiresAt);
