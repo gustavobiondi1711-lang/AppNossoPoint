@@ -134,12 +134,17 @@ export default function Login() {
         return false;
       }
 
-      // backend esperado: { data: true/false, cargo: '...' }
+      // backend esperado: { data: true/false, cargo: '...', carrinho: '...' }
       if (data?.data) {
         // sucesso → persiste sessão
-        await persistSession(user, pass, data?.cargo);
+        await persistSession(user, pass, data?.cargo, data?.carrinho);
         // seta usuário no contexto (token = expoPushToken para seu app)
-        setUser?.({ username: user, cargo: data?.cargo, token: expoPushToken || 'semtoken' });
+        setUser?.({
+          username: user,
+          cargo: data?.cargo,
+          carrinho: data?.carrinho || '',
+          token: expoPushToken || 'semtoken',
+        });
         setIsLoggedIn?.(true);
         return true;
       }
@@ -162,7 +167,7 @@ export default function Login() {
   }
 
   // salva sessão e envia expo token + cargo
-  async function persistSession(user, pass, cargo) {
+  async function persistSession(user, pass, cargo, carrinho) {
     const expirationTime = Date.now() + TTL_HOURS * 60 * 60 * 1000;
     const guardar_token = generateToken();
 
@@ -187,6 +192,7 @@ export default function Login() {
           body: JSON.stringify({
             username: user,
             cargo,
+            carrinho,
             token: expoPushToken || 'semtoken',
           }),
         })

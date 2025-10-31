@@ -102,6 +102,11 @@ export default class HomeScreen extends React.Component {
     this._netinfoUnsub = null;
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   // =============== Ciclo de vida ===============
   async componentDidMount() {
     this._isMounted = true;
@@ -784,7 +789,7 @@ export default class HomeScreen extends React.Component {
       const resp = await fetch(`${API_URL}/verificar_quantidade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item: pedido, quantidade }),
+        body: JSON.stringify({ item: pedido, quantidade, carrinho: this.getCarrinho() }),
       });
 
       let data;
@@ -989,7 +994,7 @@ export default class HomeScreen extends React.Component {
           const resp = await fetch(`${API_URL}/verificar_quantidade`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ item: pedido, quantidade }),
+            body: JSON.stringify({ item: pedido, quantidade, carrinho: this.getCarrinho() }),
           });
           data = await resp.json();
         } catch {

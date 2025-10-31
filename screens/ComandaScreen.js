@@ -96,6 +96,11 @@ class ComandaScreen extends React.Component {
     this._timeouts = new Set();
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   // ---------- utils ----------
   safeSetState = (updater, cb) => { if (this._isMounted) this.setState(updater, cb); };
   addTimeout = (fn, ms) => {
@@ -391,10 +396,10 @@ sanitizeDecimalInput = (raw) => {
   atualizarOrdem = (sinal, ordem) => {
     if (sinal === '-' && this.state.ordem > 0) { 
     this.setState({ ordem: ordem - 1 });
-    fetch(`${API_URL}/pegar_pedidos`, 
-    { method: 'POST', 
+    fetch(`${API_URL}/pegar_pedidos`,
+    { method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ comanda: this.state.fcomanda, ordem: ordem - 1 }), })
+    body: JSON.stringify({ comanda: this.state.fcomanda, ordem: ordem - 1, carrinho: this.getCarrinho() }), })
     .then(r => r.json())
     .then(data => { if (data?.data) this.setState({ data: data.data, dataGeral: data.data, preco: data.preco });})
     .catch(console.error); 
@@ -404,7 +409,7 @@ sanitizeDecimalInput = (raw) => {
    fetch(`${API_URL}/pegar_pedidos`,{
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ comanda: this.state.fcomanda, ordem: ordem + 1 }),
+    body: JSON.stringify({ comanda: this.state.fcomanda, ordem: ordem + 1, carrinho: this.getCarrinho() }),
     })
     .then(r => r.json())
     .then(data => { 
@@ -447,7 +452,7 @@ sanitizeDecimalInput = (raw) => {
       const resp = await fetch(`${API_URL}/pegar_pagamentos_comanda`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comanda: this.state.fcomanda }),
+        body: JSON.stringify({ comanda: this.state.fcomanda, carrinho: this.getCarrinho() }),
       });
       const json = await resp.json();
       const pagamentos = Array.isArray(json) ? json : (json?.pagamentos || json?.data || []);
@@ -477,7 +482,7 @@ sanitizeDecimalInput = (raw) => {
       const resp = await fetch(`${API_URL}/excluir_pagamento`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comanda: this.state.fcomanda, pagamento_id: pagamentoId }),
+        body: JSON.stringify({ comanda: this.state.fcomanda, pagamento_id: pagamentoId, carrinho: this.getCarrinho() }),
       });
       if (!resp.ok) throw new Error('HTTP');
       this.safeSetState(prev => ({
@@ -523,6 +528,7 @@ sanitizeDecimalInput = (raw) => {
         body: JSON.stringify({
           comanda_origem: fcomanda,
           comanda_destino: transferDestino,
+          carrinho: this.getCarrinho(),
         }),
       });
 
@@ -535,7 +541,7 @@ sanitizeDecimalInput = (raw) => {
 
       fetch(`${API_URL}/pegar_pedidos`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comanda: nova, ordem: 0 }),
+        body: JSON.stringify({ comanda: nova, ordem: 0, carrinho: this.getCarrinho() }),
       })
         .then(r => r.json())
         .then(data => {

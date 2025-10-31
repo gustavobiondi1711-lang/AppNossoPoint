@@ -1,5 +1,5 @@
 // opcoesScreen.js
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import { API_URL } from "./url";
+import { UserContext } from "../UserContext";
 
 // ======= PALETA (alto contraste sol) =======
 const COLORS = {
@@ -61,6 +62,8 @@ function uniqBy(arr, keyFn) {
 }
 
 export default function OpcoesScreen() {
+  const { user } = useContext(UserContext);
+  const carrinho = user?.carrinho || "";
   // ======= Filters / Query State =======
   const [search, setSearch] = useState("");
   const [grupoSlug, setGrupoSlug] = useState(""); // "" = todos
@@ -183,6 +186,7 @@ export default function OpcoesScreen() {
       if (somenteEsgotados) params.set("somente_esgotados", "1");
       if (somenteExtraPositivo) params.set("somente_extra_positivo", "1");
       params.set("limit", "100");
+      params.set("carrinho", carrinho || "");
 
       const url = `${API_URL}/opcoes/aggregate?${params.toString()}`;
       const res = await fetchWithTimeout(url, {}, "agg");
@@ -217,6 +221,7 @@ export default function OpcoesScreen() {
       if (somenteEsgotados) params.set("somente_esgotados", "1");
       if (somenteExtraPositivo) params.set("somente_extra_positivo", "1");
       params.set("limit", "500");
+      params.set("carrinho", carrinho || "");
 
       const url = `${API_URL}/opcoes/aggregate?${params.toString()}`;
       const res = await fetchWithTimeout(url, {}, "group");
@@ -349,6 +354,7 @@ export default function OpcoesScreen() {
     }
     const items = selectedItemIds();
     return {
+      carrinho,
       where: {
         grupo_slug: currentCluster.grupo_slug,
         opcao_slug: currentCluster.opcao_slug,
@@ -430,7 +436,7 @@ export default function OpcoesScreen() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: data.items }),
+            body: JSON.stringify({ items: data.items, carrinho }),
           },
           "group"
         ).catch(() => {});
@@ -481,6 +487,7 @@ export default function OpcoesScreen() {
     }
     const items = selectedItemIds();
     return {
+      carrinho,
       where: { grupo_slug: currentCluster.grupo_slug },
       restrict_items: items.length ? items : undefined,
       set,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import React, { useContext, useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { API_URL } from './url';
+import { UserContext } from '../UserContext';
 import { getSocket } from '../socket';
 
 // ==========================
@@ -460,6 +461,8 @@ export default function PricesManagement() {
   const [produtosCardapio, setProdutosCardapio] = useState([]);
   const [showExpiredOnly, setShowExpiredOnly] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  const { user } = useContext(UserContext);
+  const carrinho = user?.carrinho || '';
   const [deletingId, setDeletingId] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -585,7 +588,7 @@ export default function PricesManagement() {
       const res = await fetch(`${API_URL}/delete_promotion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: promo.id }),
+        body: JSON.stringify({ id: promo.id, carrinho }),
       });
 
       if (!res.ok) {

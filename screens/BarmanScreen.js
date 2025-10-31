@@ -56,6 +56,11 @@ export default class BarmanScreen extends React.Component {
     this.extra = this.extra.bind(this);
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   // ===== Util =====
   safeSetState = (updater, cb) => {
     if (!this._isMounted) return;
@@ -247,7 +252,7 @@ export default class BarmanScreen extends React.Component {
               const upd = await fetch(`${API_URL}/updatePrinted`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pedidoId: job.id }),
+                body: JSON.stringify({ pedidoId: job.id, carrinho: this.getCarrinho() }),
               });
               if (!upd.ok) {
                 const errText = await upd.text();
@@ -281,7 +286,7 @@ export default class BarmanScreen extends React.Component {
       const resp = await fetch(`${API_URL}/getPendingPrintOrders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ printed: 0, ordem: 0 }),
+        body: JSON.stringify({ printed: 0, ordem: 0, carrinho: this.getCarrinho() }),
       });
 
       const text = await resp.text();
