@@ -1,24 +1,20 @@
-from flask import send_from_directory
 import sqlite3
 from contextlib import closing
 import atexit
+import time
 import unicodedata
-import qrcode
-from qrcode.constants import ERROR_CORRECT_Q
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from flask import Flask, request, jsonify, url_for
+from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
 from cs50 import SQL
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 from pytz import timezone
-import os, random, time, requests, threading
+import os, time, requests, threading
 import pandas as pd
-from io import BytesIO
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 import subprocess
@@ -28,12 +24,12 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 import jwt
 import json
-import os, io, base64, re, unicodedata 
+import os, re, unicodedata 
 
 
 from werkzeug.utils import secure_filename
-var = True
-manipule = True
+var = False 
+manipule = False
 if manipule:
     subprocess.run(['python','manipule.py'])
 
@@ -44,21 +40,20 @@ app = Flask(
     static_url_path='/data'    # endereço para acessar esses arquivos
 )
 
-app.config['SECRET_KEY'] = 'seu_segredo_aqui'
+load_dotenv()
+app.config['SECRET_KEY'] = os.getenv("MOST_SECRET_KEY",'quero-quero17')
 socketio = SocketIO(app, cors_allowed_origins="*")  
 import shutil
 
-SECRET_KEY = "sua_chave_super_secreta_aqui"
 
-load_dotenv()
-ACCOUNT_SID = os.getenv("ACCOUNT_SID_TWILIO")
-AUTH_TOKEN  = os.getenv("AUTH_TOKEN_TWILIO")
-VERIFY_SID  = os.getenv("VERIFY_SID") 
+SECRET_KEY = os.getenv("MOST_SECRET_KEY", 'quero-quero17')
 
-PIX_KEY = os.getenv("PIX_KEY", "nossopointdrinks@gmail.com")  # sua chave Pix (email/cpf/cnpj/phone/aleatória)
-MERCHANT_NAME = os.getenv("PIX_MERCHANT_NAME", "NOSSOPOINT")   # até 25 chars
-MERCHANT_CITY = os.getenv("PIX_MERCHANT_CITY", "SAO PAULO")    # até 15 chars, sem acento
-TXID_PREFIX = os.getenv("PIX_TXID_PREFIX", "WEB")
+print('SECRET_KEY',SECRET_KEY)
+ACCOUNT_SID = os.getenv("ACCOUNT_SID_TWILIO",'ACe2b44d7bd27f18525eb33dd4ea8b891a')
+AUTH_TOKEN  = os.getenv("AUTH_TOKEN_TWILIO",'a03519e493ce0f003228acfaa3e669c2')
+VERIFY_SID  = os.getenv("VERIFY_SID",'VAda3089a24c0b290e57138ff2c44f7016') 
+
+
 
 client = Client(ACCOUNT_SID, AUTH_TOKEN)
 
@@ -79,37 +74,50 @@ def decode_number_jwt(token: str) -> int:
 
 @app.route("/validate_table_number_on_qr", methods=['POST'])
 def validate_table_number_on_qr():
-    print('validate')
-    data = request.get_json()
-    print('data',data)
-    numero = data.get('numero')
-    print('numero',numero)
-    if not numero:
+    try:
+        print('validate')
+        data = request.get_json()
+        print('data',data)
+        numero = data.get('numero')
+        print('numero',numero)
+        if not numero:
+            return jsonify({'valid': False}), 200
+        tableNumber = decode_number_jwt(numero)
+        print('tablenumver',tableNumber)
+        if 1 <= tableNumber <= 80:
+            return jsonify({'valid': True,'tableNumber':tableNumber}), 200
         return jsonify({'valid': False}), 200
-    tableNumber = decode_number_jwt(numero)
-    print('tablenumver',tableNumber)
-    if 1 <= tableNumber <= 80:
-        return jsonify({'valid': True,'tableNumber':tableNumber}), 200
-    return jsonify({'valid': False}), 200
+    except Exception as e:
+        print('erro ao validar numero:', e)
+        return jsonify({'valid': False}), 200
 
 
 
 @app.route("/auth/sms/create", methods=["POST"])
 def send_verification():
-    print('creatingsms')
-    phone = request.json.get("phone")
-    #v = client.verify.v2.services(VERIFY_SID).verifications.create(to=phone, channel="sms")
-    #print(v)
-    return jsonify({"status": 'pending'}), 200
+    try:
+        print('creatingsms')
+        phone = request.json.get("phone")
+        print('phone',phone)
+        verification = client.verify.v2.services('VAda3089a24c0b290e57138ff2c44f7016').verifications.create(to='+5513978258866', channel='sms')
+        print(verification.sid)
+        return jsonify({"status": 'pending'}), 200
+    except Exception as e:
+        print('erro no envio:', e)
+        return jsonify({"status": 'error'}), 200
 
 @app.route("/auth/sms/check", methods=["POST"])
 def check_verification():
-    print('verification')
-    #phone = request.json.get("phone")
-    #code = request.json.get("code")
-    #chk = client.verify.v2.services(VERIFY_SID).verification_checks.create(to=phone, code=code)
-    #print(chk)
-    return jsonify({"status": 'approved'}), 200  # 'approved' se ok
+    try:
+        print('verification')
+        phone = request.json.get("phone")
+        code = request.json.get("code")
+        chk = client.verify.v2.services(VERIFY_SID).verification_checks.create(to=phone, code=code)
+        print(chk)
+        return jsonify({"status": 'approved'}), 200  # 'approved' se ok
+    except Exception as e:
+        print('erro na verificacao:', e)
+        return jsonify({"status": 'denied'}), 200
 
 @app.route('/pegar_pagamentos_comanda', methods=['POST'])
 def pegar_pagamentos_comanda():
@@ -180,53 +188,59 @@ os.makedirs(app.static_folder, exist_ok=True)
 def home():
     return "Aplicação funcionando!", 200
 
-from datetime import datetime, timedelta
-from flask import request, jsonify
+
 
 @app.route('/validate_token_on_qr', methods=['POST'])
 def validate_token_on_qr():
-    print('entrou validate token')
-    print('validate token')
-    data = request.get_json()
-    print('data',data)
-    token = data.get('token')
-    print('token',token)
-    exist = db.execute('SELECT dataUpdateToken FROM clientes WHERE token = ?', token)
-    if exist:
-        data_update = exist[0]['dataUpdateToken']
-        if isinstance(data_update, str):
-            try:
-                # tenta converter do formato padrão ISO (YYYY-MM-DD)
-                data_update_date = datetime.strptime(data_update, "%Y-%m-%d").date()
-            except ValueError:
-                # se vier num formato inesperado, tenta com hora
-                data_update_date = datetime.fromisoformat(data_update).date()
-        else:
-            data_update_date = data_update
-        print('data_update',data_update_date)
-        if data_update_date < datetime.now(brazil).date() + timedelta(days=5):
-            print('valid token')
-            return jsonify({'valid': True}), 200
-    print('invalid token or expired')
-    return jsonify({'valid': False}), 200
+    try:
+        print('entrou validate token')
+        print('validate token')
+        data = request.get_json()
+        print('data',data)
+        token = data.get('token')
+        print('token',token)
+        exist = db.execute('SELECT dataUpdateToken FROM clientes WHERE token = ?', token)
+        if exist:
+            data_update = exist[0]['dataUpdateToken']
+            if isinstance(data_update, str):
+                try:
+                    # tenta converter do formato padrão ISO (YYYY-MM-DD)
+                    data_update_date = datetime.strptime(data_update, "%Y-%m-%d").date()
+                except ValueError:
+                    # se vier num formato inesperado, tenta com hora
+                    data_update_date = datetime.fromisoformat(data_update).date()
+            else:
+                data_update_date = data_update
+            print('data_update',data_update_date)
+            if data_update_date < datetime.now(brazil).date() + timedelta(days=5):
+                print('valid token')
+                return jsonify({'valid': True}), 200
+        print('invalid token or expired')
+        return jsonify({'valid': False}), 200
+    except Exception as e:
+        print('erro ao validar token:', e)
+        return jsonify({'valid': False}), 200
 
 @app.route('/guardar_login', methods=['POST'])
 def guardar_login():
     
     print('entrou guardar login')
-    data = request.get_json(silent=True) or {}
+    data = request.get_json()
     number = str(data.get('numero'))
-    print('number',number)
+    
 
     if not number:
+        print('sem numero')
         return jsonify({"error": "Campo 'number' é obrigatório."}), 400
-
+    else:
+        print('number',number)
+    
     # Busca 1 usuário; evite depender de != 'bloqueado' no WHERE para mensagens claras
     
     payload = {
     "sub": f"{number}",      # identificador do usuário (pode ser id, CPF, etc.)
     "name": f"nome:{number}",  # nome do usuário
-    "iat": int(datetime.now(brazil).timestamp()),
+    "iat": int(time.time()),  # emitido em (timestamp)
     }
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     print('token',token)
@@ -397,24 +411,28 @@ def verif_quantidade():
     data = request.json  # Use request.json para pegar o corpo da requisição
     item = data.get('item')
     quantidade = data.get('quantidade')
+    print(f'Item: {item}, Quantidade: {quantidade}')
 
     categoria = db.execute(
         'SELECT categoria_id FROM cardapio WHERE item = ?', item)
 
-    if categoria and categoria[0]['categoria_id'] != 2:
+    if categoria and categoria[0]['categoria_id'] == 1:
         verificar_estoque = db.execute(
             'SELECT quantidade,estoque_ideal FROM estoque WHERE item = ?', item)
 
         if verificar_estoque:
             estoque_atual = float(verificar_estoque[0]['quantidade'])
             if estoque_atual - float(quantidade) < 0:
+                print('estoque insuficiente')
                 return {'erro': 'Estoque insuficiente', 'quantidade': estoque_atual}
             elif estoque_atual:
                 estoque_ideal = verificar_estoque[0]['estoque_ideal']
                 if estoque_ideal:
                     alerta = 7 if item!='tropical' and item!='red bull' else 3
                     if estoque_atual<alerta:
+                        print('estoque baixo')
                         return {'erro': False, 'quantidade': estoque_atual}
+    print('estoque ok')
     return {'erro': False}
 
 
@@ -454,6 +472,7 @@ def transferir_comanda():
 
         # Fetch orders from the source comanda
         db.execute("UPDATE pedidos SET comanda = ? WHERE comanda = ? AND ordem = ? AND dia = ?", comanda_destino, comanda_origem, 0, datetime.now().date())
+        db.execute("UPDATE pagamentos SET comanda = ? WHERE comanda = ? AND ordem = ? AND dia = ?", comanda_destino, comanda_origem, 0, datetime.now().date())
         getPedidos(True)
         getComandas(True)
         handle_get_cardapio(comanda_destino)
@@ -1752,6 +1771,8 @@ def atualizar__comanda(data):
                         ''', comanda,dia, 'Comanda Aberta', 'Carrinho:NossoPoint')
     
     getEstoque(True)
+    getPedidos(True)
+    getComandas(True)
     handle_get_cardapio(comanda)
 
 @socketio.on('transferir_para_estoque_carrinho')
@@ -3317,172 +3338,6 @@ def opcoes_group_props_bulk():
         "dry_run": False
     })
 
-# ====== HELPERS ======
-def strip_accents_upper(s: str) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFD", s)
-    s = s.encode("ascii", "ignore").decode("ascii")
-    return s.upper()
-
-def sanitize_txid(s: str) -> str:
-    # Especificação permite [a-zA-Z0-9]{1,25}
-    s = re.sub(r"[^A-Za-z0-9]", "", s or "")
-    return s[:25] or "TXID"
-
-def emv(k: str, v: str) -> str:
-    vb = v.encode("utf-8")
-    return f"{k}{len(vb):02d}{v}"
-
-def crc16(payload: str) -> str:
-    # CRC16-CCITT (0x1021)
-    polynomial = 0x1021
-    result = 0xFFFF
-    for ch in payload.encode("utf-8"):
-        result ^= ch << 8
-        for _ in range(8):
-            if (result & 0x8000) != 0:
-                result = (result << 1) ^ polynomial
-            else:
-                result <<= 1
-            result &= 0xFFFF
-    return format(result, "04X")
-
-def strip_accents_ascii(s: str) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFD", s)
-    s = s.encode("ascii", "ignore").decode("ascii")
-    # mantém letras, números, espaço e alguns sinais básicos
-    s = re.sub(r"[^A-Za-z0-9 \-_.]", "", s)
-    return s
-
-def up_to(s: str, n: int) -> str:
-    return (s or "")[:n]
-
-def bytes_len(s: str) -> int:
-    return len((s or "").encode("utf-8"))
-
-def build_pix_payload(key: str, nome: str, cidade: str, valor: float, txid: str, descricao: str = "") -> str:
-    # normalizações
-    nome = up_to(strip_accents_ascii(nome).upper(), 25) or "LOJA"
-    cidade = up_to(strip_accents_ascii(cidade).upper(), 15) or "SAO PAULO"
-    descricao = up_to(strip_accents_ascii(descricao), 40)
-    valor_str = f"{float(valor):.2f}"
-
-    # 00 e 01 (estático)
-    pfi  = emv("00", "01")
-    poim = emv("01", "11")  # <- trocado para 11
-
-    # 26: BR Code Pix
-    gui = emv("00", "BR.GOV.BCB.PIX")
-    mai = gui + emv("01", key)
-    if descricao:
-        mai += emv("02", descricao)
-    mai_full = emv("26", mai)
-
-    # 52/53/54/58/59/60
-    mcc           = emv("52", "0000")
-    currency      = emv("53", "986")
-    amount        = emv("54", valor_str)
-    country       = emv("58", "BR")
-    merchant_name = emv("59", nome)
-    merchant_city = emv("60", cidade)
-
-    # 62: TXID
-    add      = emv("05", txid[:25])
-    add_full = emv("62", add)
-
-    # 63: CRC
-    partial = pfi + poim + mai_full + mcc + currency + amount + country + merchant_name + merchant_city + add_full + "6304"
-    crc = crc16(partial + "0000")
-    return partial + crc
-
-def make_qr_png_base64(data: str) -> str:
-    qr = qrcode.QRCode(
-        version=None,  # ajusta automaticamente
-        error_correction=ERROR_CORRECT_Q,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def normalize_pix_key(key: str) -> str:
-    k = (key or "").strip()
-    # ajuste pelo tipo que você usa de verdade:
-    # CPF:
-    return re.sub(r"\D", "", k)
-#====== ROUTE ======
-@app.post("/pix/qr")
-def gerar_qr():
-    """
-    Espera JSON:
-    {
-      "pedido_id": "WEBABC123",
-      "valor": "49.90" (ou numero),
-      "descricao": "Pedido WEBABC123" (opcional)
-    }
-    Retorna:
-    {
-      "txid": "...",
-      "payload": "<brcode copia e cola>",
-      "qr_png_base64": "data:image/png;base64,..."
-    }
-    """
-    try:
-        data = request.get_json(force=True, silent=False) or {}
-        pedido_id = str(data.get("pedido_id") or "").strip()
-        descricao = str(data.get("descricao") or "")[:40]
-
-        if "valor" not in data:
-            return jsonify({"error": "Campo 'valor' é obrigatório."}), 400
-
-        try:
-            valor = float(str(data.get("valor")).replace(",", "."))
-        except (TypeError, ValueError):
-            return jsonify({"error": "Valor inválido."}), 400
-
-        if valor <= 0:
-            return jsonify({"error": "Valor deve ser maior que zero."}), 400
-
-        txid = sanitize_txid(f"{TXID_PREFIX}{pedido_id}")
-
-        key_norm = normalize_pix_key(PIX_KEY)
-        
-        payload = build_pix_payload(
-            key=PIX_KEY,
-            nome=MERCHANT_NAME,
-            cidade=MERCHANT_CITY,
-            valor=valor,
-            txid=txid,
-            descricao=descricao,
-        )
-
-        print("TOTAL BYTES do payload:", bytes_len(payload))
-
-        qr_b64 = make_qr_png_base64(payload)
-
-        return jsonify({
-            "txid": txid,
-            "payload": payload,          # Pix Copia e Cola
-            "qr_png_base64": qr_b64,      # imagem do QR para exibir/baixar
-            "debug_key_used": key_norm
-        })
-    except Exception as e:
-        # logue e trate como preferir
-        return jsonify({"error": f"Falha ao gerar Pix: {str(e)}"}), 500
-
-
-
-
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8000))
-
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
-
+    socketio.run(app, host='0.0.0.0', port=port, debug=True)
