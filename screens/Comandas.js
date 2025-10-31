@@ -50,6 +50,11 @@ export default class VerComandas extends React.Component {
     this.debouncedSearch = debounce(this.applySearch, 180);
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   // ---------- utils ----------
   safeSetState = (updater, cb) => {
     if (!this._isMounted) return;
@@ -136,7 +141,8 @@ export default class VerComandas extends React.Component {
     if (!this.socket || !this.socket.connected) {
       return this.safeSetState({ submitMsg: 'Sem conexão com o servidor.' });
     }
-    this.socket.emit('getComandas', false);
+    const carrinho = this.getCarrinho();
+    this.socket.emit('getComandas', { emitir: false, carrinho });
   };
 
   // ---------- refresh ----------
@@ -230,7 +236,8 @@ export default class VerComandas extends React.Component {
 
     // emite solicitação
     try {
-      this.socket.emit('get_cardapio', { fcomanda: item.comanda, ordem });
+      const carrinho = this.getCarrinho();
+      this.socket.emit('get_cardapio', { fcomanda: item.comanda, ordem, carrinho });
     } catch {
       this.releaseRowBusy(key);
       this.safeSetState({ submitMsg: 'Erro ao solicitar dados da comanda.' });

@@ -109,6 +109,8 @@ export default class Cadastro extends React.Component {
     if (this.state.isSubmitting) return; // evita clique duplo
 
     const { username, senha1, senha2, showSenha2, cargo, isConnected } = this.state;
+    const { user } = this.context || {};
+    const carrinho = user?.carrinho || '';
 
     // rede e socket
     if (!isConnected) {
@@ -143,7 +145,7 @@ export default class Cadastro extends React.Component {
     if (senha1 !== senha2) return this.feedback('Senhas não conferem.');
 
     // pronto para enviar
-    const payload = { username: vu.value, senha: v1.value, cargo: vc.value };
+    const payload = { username: vu.value, senha: v1.value, cargo: vc.value, carrinho };
 
     this.safeSetState({ isSubmitting: true, submitMsg: 'Cadastrando...' });
 

@@ -46,6 +46,11 @@ export default class CoWorksScreen extends React.Component {
     this._pendingDayReq = null;
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   // ---------- utils ----------
   safeSetState = (updater, cb) => {
     if (this._isMounted) this.setState(updater, cb);
@@ -114,7 +119,8 @@ export default class CoWorksScreen extends React.Component {
   emitGetAlteracoes = () => {
     if (!this.isServerReady()) return;
     this.safeSetState({ loading: true, lastError: "" });
-    this.socket.emit("getAlteracoes", false);
+    const carrinho = this.getCarrinho();
+    this.socket.emit("getAlteracoes", { emitir: false, carrinho });
 
     // timeout de segurança
     this.addTimeout(() => {
@@ -152,7 +158,8 @@ export default class CoWorksScreen extends React.Component {
     this.safeSetState({ dayBusy: true, change: novoChange, lastError: "" });
     this._pendingDayReq = { novoChange };
 
-    this.socket.emit("getAlteracoes", { emitir: false, change: novoChange });
+    const carrinho = this.getCarrinho();
+    this.socket.emit("getAlteracoes", { emitir: false, change: novoChange, carrinho });
 
     // timeout de segurança para liberar UI
     this.addTimeout(() => {
