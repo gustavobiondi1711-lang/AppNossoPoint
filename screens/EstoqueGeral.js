@@ -141,6 +141,11 @@ export default class EstoqueGeral extends React.Component {
     this.emitEditar = this.emitEditar.bind(this);
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   componentDidMount() {
     this._mounted = true;
     this.socket = getSocket();
@@ -321,7 +326,8 @@ export default class EstoqueGeral extends React.Component {
   refreshData() {
     if (this.state.refreshing) return; // anti-spam
     this.setState({ refreshing: true }, () => {
-      this.socket?.emit('getEstoqueGeral', false);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('getEstoqueGeral', { emitir: false, carrinho });
       if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
       this.refreshTimeout = setTimeout(() => this._mounted && this.setState({ refreshing: false }), 10000);
     });
@@ -370,6 +376,7 @@ export default class EstoqueGeral extends React.Component {
         itensAlterados,
         username: user?.username,
         token: user?.token,
+        carrinho: user?.carrinho,
       });
       this.setState({ showEditar: false });
       this.itensAlteradosMap.clear();
@@ -388,6 +395,7 @@ export default class EstoqueGeral extends React.Component {
         itensAlterados,
         username: user?.username,
         token: user?.token,
+        carrinho: user?.carrinho,
       });
       this.setState({ showEditar: false });
       this.itensAlteradosMap.clear();
@@ -434,6 +442,7 @@ export default class EstoqueGeral extends React.Component {
         username: user?.username,
         token: user?.token,
         mudar_os_dois: emAmbos,
+        carrinho: user?.carrinho,
       });
 
       this.setState({

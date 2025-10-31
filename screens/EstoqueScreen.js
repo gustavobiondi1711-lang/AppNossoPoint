@@ -126,6 +126,11 @@ export default class EstoqueScreen extends React.Component {
     this._mounted = false;
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   componentDidMount() {
     this._mounted = true;
     this.socket = getSocket();
@@ -159,7 +164,8 @@ export default class EstoqueScreen extends React.Component {
   refreshData = () => {
     if (this.state.refreshing) return; // anti-spam
     this.setState({ refreshing: true }, () => {
-      this.socket?.emit('getEstoque', false);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('getEstoque', { emitir: false, carrinho });
       if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
       // fallback de rede
       this.refreshTimeout = setTimeout(() => {
@@ -341,6 +347,7 @@ export default class EstoqueScreen extends React.Component {
         itensAlterados,
         username: user?.username,
         token: user?.token,
+        carrinho: user?.carrinho,
       });
       this.setState({ showEditar: false });
       this.itensAlteradosMap.clear();
@@ -393,6 +400,7 @@ export default class EstoqueScreen extends React.Component {
         username: user?.username,
         token: user?.token,
         mudar_os_dois: emAmbos,
+        carrinho: user?.carrinho,
       });
 
       this.setState({

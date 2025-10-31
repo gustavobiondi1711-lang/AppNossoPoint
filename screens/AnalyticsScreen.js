@@ -95,6 +95,11 @@ export default class Analytics extends React.Component {
     this.socket = null
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   componentDidMount() {
     this.socket = getSocket();
 
@@ -113,7 +118,8 @@ export default class Analytics extends React.Component {
 
   initializeData = () => {
     this.setState({ refreshing: true }, () => {
-      this.socket?.emit("faturamento", false);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit("faturamento", { emitir: false, change: 0, carrinho });
       setTimeout(() => this.setState({ refreshing: false }), 400);
     });
   };
@@ -241,7 +247,8 @@ export default class Analytics extends React.Component {
       this.setState({ startDate: new 	Date(), endDate: new Date() });
     }
     if (change <= 0) {
-      this.socket?.emit("faturamento", { emitir: false, change: change });
+      const carrinho = this.getCarrinho();
+      this.socket?.emit("faturamento", { emitir: false, change: change, carrinho });
             // em mudarDia (ou onde você atualiza)
       const base = new Date();
       base.setHours(0, 0, 0, 0);          // zera hora p/ evitar drift
@@ -259,11 +266,12 @@ export default class Analytics extends React.Component {
     const date_from = fmtDate(start); // AAAA-MM-DD
     const date_to   = fmtDate(end);
     this.setState({ startDate: start, endDate: end, showRangeModal: false });
-  
+
     this.socket?.emit("faturamento_range", {
       emitir: false,
       date_from,
       date_to,
+      carrinho: this.getCarrinho(),
     });
   };
 

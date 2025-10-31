@@ -90,6 +90,11 @@ export default class HomeScreenCozinha extends React.Component {
     this._netinfoUnsub = null;
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   // ======= helpers de UI/locks =======
   sendWithLock = async (fn, { lockKey = 'sending', releaseMs = 6000 } = {}) => {
     if (this.state[lockKey]) return;
@@ -643,7 +648,7 @@ export default class HomeScreenCozinha extends React.Component {
         const resp = await fetch(`${API_URL}/verificar_quantidade`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ item: pedido, quantidade }),
+          body: JSON.stringify({ item: pedido, quantidade, carrinho: this.getCarrinho() }),
         });
         const data = await resp.json();
 
@@ -858,7 +863,7 @@ export default class HomeScreenCozinha extends React.Component {
           const resp = await fetch(`${API_URL}/verificar_quantidade`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ item: pedido, quantidade }),
+            body: JSON.stringify({ item: pedido, quantidade, carrinho: this.getCarrinho() }),
           });
           const data = await resp.json();
 

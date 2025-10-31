@@ -74,6 +74,11 @@ export default class ScreenCardapio extends React.Component {
     this.debouncedSearchModal = debounce((txt) => this.searchModal(txt, 5), 150);
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   // ---------- getters/util ----------
   get defaultOpcoes() {
     return [
@@ -161,7 +166,8 @@ export default class ScreenCardapio extends React.Component {
   // ---------- socket/data ----------
   initializeData = () => {
     if (!this.socket) return;
-    this.socket.emit('getCardapio', false);
+    const carrinho = this.getCarrinho();
+    this.socket.emit('getCardapio', { emitir: false, carrinho });
   };
 
   handleRespostaCardapio = (data) => {
@@ -465,6 +471,7 @@ export default class ScreenCardapio extends React.Component {
     const payloadBase = {
       username: user?.username,
       token: user?.token,
+      carrinho: user?.carrinho,
     };
 
     const payloads = {

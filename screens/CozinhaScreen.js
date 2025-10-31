@@ -83,6 +83,11 @@ export default class Cozinha extends React.Component {
     this._mounted = false;
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   componentDidMount() {
     this._mounted = true;
     const { user } = this.context || {};
@@ -129,7 +134,7 @@ export default class Cozinha extends React.Component {
       await fetch(`${API_URL}/updatePrinted`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pedidoId: order.id }),
+        body: JSON.stringify({ pedidoId: order.id, carrinho: this.getCarrinho() }),
       });
     } catch (e) {
       console.log('Erro ao imprimir (cozinha):', e);
@@ -142,7 +147,7 @@ export default class Cozinha extends React.Component {
       const resp = await fetch(`${API_URL}/getPendingPrintOrders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ printed: 0, ordem: 0 }),
+        body: JSON.stringify({ printed: 0, ordem: 0, carrinho: this.getCarrinho() }),
       });
 
       const text = await resp.text();
@@ -174,7 +179,7 @@ export default class Cozinha extends React.Component {
           const upd = await fetch(`${API_URL}/updatePrinted`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pedidoId: order.id }),
+            body: JSON.stringify({ pedidoId: order.id, carrinho: this.getCarrinho() }),
           });
           if (!upd.ok) {
             const errText = await upd.text();

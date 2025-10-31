@@ -59,6 +59,11 @@ export default class ChoseUser extends React.Component {
     this._ackTimer = null;
   }
 
+  getCarrinho = () => {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  };
+
   // ===== util =====
   safeSetState = (updater, cb) => {
     if (!this._isMounted) return;
@@ -79,7 +84,12 @@ export default class ChoseUser extends React.Component {
         resolve(resp || { ok: true });
       };
       try {
-        this.socket.emit(event, payload, done);
+        const carrinho = this.getCarrinho();
+        const finalPayload =
+          payload && typeof payload === 'object'
+            ? { ...payload, carrinho }
+            : { carrinho };
+        this.socket.emit(event, finalPayload, done);
         this._ackTimer = setTimeout(() => done({ ok: false, message: 'Sem resposta do servidor' }), timeoutMs);
       } catch (e) {
         done({ ok: false, message: 'Erro ao emitir' });
@@ -149,7 +159,8 @@ export default class ChoseUser extends React.Component {
     }
 
     this.safeSetState({ refreshing: true, submitMsg: '' }, () => {
-      this.socket.emit('users', false);
+      const carrinho = this.getCarrinho();
+      this.socket.emit('users', { emitir: false, carrinho });
       // fallback para não travar refresh
       if (this._refreshTimeout) clearTimeout(this._refreshTimeout);
       this._refreshTimeout = setTimeout(() => this.safeSetState({ refreshing: false }), 7000);

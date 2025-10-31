@@ -9,7 +9,7 @@ export default function LogOut() {
   const handleLogOut = async () => {
     await AsyncStorage.removeItem('usersenha');
     await AsyncStorage.removeItem('senhaExpiration');
-    setUser({ username: '', cargo: '', token: '' }); // limpa o contexto do usuário
+    setUser({ username: '', cargo: '', carrinho: '', token: '' }); // limpa o contexto do usuário
   };
 
   return (
