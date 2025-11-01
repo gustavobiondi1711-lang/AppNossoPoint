@@ -413,7 +413,7 @@ def pegar_pedidos():
     data = request.get_json()
     comanda = data.get('comanda')
     ordem = data.get('ordem')
-    carrinho = data.get('carrinho', 'NossoPoint')
+    carrinho = data.get('carrinho')
     if int(ordem) != 0:
         
         print(f'ORDEM : {ordem}')
@@ -445,7 +445,7 @@ def verificar_usu():
         'SELECT * FROM usuarios WHERE username =? AND senha =? AND liberado=?', username, senha, '1')
     if existe:
         print('true')
-        return {'data': True, 'cargo': existe[0]['cargo']}
+        return {'data': True, 'cargo': existe[0]['cargo'], 'carrinho':existe[0]['carrinho']}
     else:
         print('false')
         return {'data': False}
@@ -576,6 +576,7 @@ def handle_connect():
 def getCardapio(data):
     emitirBroadcast = data.get('emitir')
     carrinho = data.get('carrinho')
+    print("Carrinho", carrinho)
     _register_carrinho_room(carrinho)
     dataCardapio = db.execute("SELECT * FROM cardapio WHERE carrinho = ? ORDER BY item ASC", carrinho)
     if emitirBroadcast:
