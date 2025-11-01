@@ -514,16 +514,18 @@ export default function PricesManagement() {
 
     // listeners
     try {
-      s.emit?.('getPromotions', false);
+      const payloadDefault = { emitir: false, carrinho };
+      s.emit?.('getPromotions', payloadDefault);
       s.on?.('promotionsData', onPromotionsData);
 
-      s.emit?.('getItensPromotion', false);
+      s.emit?.('getItensPromotion', payloadDefault);
       s.on?.('respostaItensPromotion', onRespostaItensPromotion);
 
       s.on?.('connect', () => {
         // ressincroniza ao reconectar
-        s.emit?.('getPromotions', true);
-        s.emit?.('getItensPromotion', true);
+        const payload = { emitir: true, carrinho };
+        s.emit?.('getPromotions', payload);
+        s.emit?.('getItensPromotion', payload);
       });
     } catch {
       // Se algo falhar silenciosamente, manter UI utilizável
@@ -570,6 +572,7 @@ export default function PricesManagement() {
         promotionData,
         emitirBroadcast: true,
         type,
+        carrinho,
       });
     } catch {
       // Mantém UI estável; backend deve sincronizar na próxima conexão

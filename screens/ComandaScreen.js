@@ -301,6 +301,7 @@ sanitizeDecimalInput = (raw) => {
       comanda: fcomanda,
       username: user?.username,
       token: user?.token,
+      carrinho: this.getCarrinho(),
     });
     this.safeSetState({ showBotoes: false, itensAlterados: [] });
   };
@@ -387,6 +388,7 @@ sanitizeDecimalInput = (raw) => {
       username,
       horario,
       extraSelecionados: [''],
+      carrinho: this.getCarrinho(),
     });
     this.safeSetState({ Brinde: '' });
   };
@@ -427,7 +429,8 @@ sanitizeDecimalInput = (raw) => {
     this.socket.emit('desfazer_pagamento', {
       comanda: this.state.fcomanda,
       preco: this.state.preco,
-      ordem: this.state.ordem
+      ordem: this.state.ordem,
+      carrinho: this.getCarrinho(),
     });
     // libera após pequeno intervalo; backend enviará 'preco' com estado atualizado
     this.addTimeout(() => this.safeSetState({ ordem: 0, undoBusy: false }), 1200);
@@ -439,7 +442,12 @@ sanitizeDecimalInput = (raw) => {
   confirmarValor = () => {
     if (!this.isServerReady()) return;
     const { alterarValor, alterarValorCategoria, fcomanda } = this.state;
-    this.socket.emit('alterarValor', { valor: alterarValor, categoria: alterarValorCategoria, comanda: fcomanda });
+    this.socket.emit('alterarValor', {
+      valor: alterarValor,
+      categoria: alterarValorCategoria,
+      comanda: fcomanda,
+      carrinho: this.getCarrinho(),
+    });
     this.safeSetState({ showAlterarValor: false, alterarValor: '', alterarValorCategoria: '' });
   };
 
@@ -491,7 +499,8 @@ sanitizeDecimalInput = (raw) => {
           return idP !== pagamentoId;
         }),
       }));
-      this.socket?.emit('faturamento', true);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('faturamento', { emitir: true, carrinho });
     } catch {
       Alert.alert('Erro', 'Não foi possível excluir o pagamento.');
     }
@@ -537,7 +546,8 @@ sanitizeDecimalInput = (raw) => {
 
       const nova = String(transferDestino);
       this.safeSetState({ fcomanda: nova, ordem: 0, showTransferModal: false, transferDestino: '' });
-      this.socket?.emit('faturamento', true);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('faturamento', { emitir: true, carrinho });
 
       fetch(`${API_URL}/pegar_pedidos`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -585,7 +595,8 @@ sanitizeDecimalInput = (raw) => {
             this.safeSetState({ brindeFiltradoBase: data.dataCardapio.map(i => i.item) });
           }
         });
-        this.socket?.emit('getCardapio', false);
+        const carrinho = this.getCarrinho();
+        this.socket?.emit('getCardapio', { emitir: false, carrinho });
       }
       this.safeSetState({ showBrindeModal: true, Brinde: '', brindeFiltrado: [] });
       return;
@@ -677,13 +688,15 @@ sanitizeDecimalInput = (raw) => {
 
     try {
       this.safeSetState({ pagandoLoading: true });
-      this.socket.emit('faturamento', true);
+      const carrinho = this.getCarrinho();
+      this.socket.emit('faturamento', { emitir: true, carrinho });
       this.socket.emit('pagar_parcial', {
         valor_pago: valorNum,
         fcomanda,
         caixinha: this.parseMoney(caixinhaValor) || null,
         dez_por_cento: dez_por_cento,
         forma_de_pagamento: metodoPagSelecionado,
+        carrinho,
       });
 
       // feedback imediato; backend enviará 'preco'
@@ -717,6 +730,7 @@ sanitizeDecimalInput = (raw) => {
         caixinha: this.parseMoney(caixinhaValor) || null,
         dez_por_cento: dez_por_cento,
         forma_de_pagamento: metodoPagSelecionado,
+        carrinho: this.getCarrinho(),
       });
 
       this.safeSetState({
@@ -766,12 +780,14 @@ sanitizeDecimalInput = (raw) => {
     try {
       this.safeSetState({ pagandoLoading: true });
 
+      const carrinho = this.getCarrinho();
       this.socket.emit('pagar_itens', {
         comanda: fcomanda,
         itens,
         forma_de_pagamento: metodoPagSelecionado,
         aplicarDez,
         caixinha: this.parseMoney(caixinhaValor) || null,
+        carrinho,
       });
 
       this.safeSetState({

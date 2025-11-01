@@ -144,13 +144,14 @@ export default class HomeScreen extends React.Component {
     }
 
     // 4) Primeiras cargas (se houver rede)
+    const carrinho = this.getCarrinho();
     if (this.state.isConnected && this.socket?.connected) {
-      this.socket.emit('getCardapio', false);
-      this.socket.emit('getComandas', false);
+      this.socket.emit('getCardapio', { emitir: false, carrinho });
+      this.socket.emit('getComandas', { emitir: false, carrinho });
     } else if (this.socket) {
       // tenta mesmo assim — servidor pode responder depois que conectar
-      this.socket.emit('getCardapio', false);
-      this.socket.emit('getComandas', false);
+      this.socket.emit('getCardapio', { emitir: false, carrinho });
+      this.socket.emit('getComandas', { emitir: false, carrinho });
     }
   }
 
@@ -303,6 +304,7 @@ export default class HomeScreen extends React.Component {
       horario: currentTime,
       username: user?.username || '',
       token_user: user?.token,
+      carrinho: this.getCarrinho(),
     });
 
     this.safeSetState({ comand: '', pedido: '', quantidade: 1, extra: '' });
@@ -943,6 +945,7 @@ export default class HomeScreen extends React.Component {
           username: username,
           opcoesSelecionadas: NovasSelecoes,
           token_user: user?.token,
+          carrinho: this.getCarrinho(),
         });
 
         this.showConfirmToast('Enviado ✅', 'success');
@@ -1045,6 +1048,7 @@ export default class HomeScreen extends React.Component {
           username: username,
           opcoesSelecionadas: [this.buildSelectionFromState()],
           token_user: user?.token,
+          carrinho: this.getCarrinho(),
         });
 
         this.showConfirmToast('Enviado ✅', 'success');
@@ -1082,7 +1086,11 @@ export default class HomeScreen extends React.Component {
     const valorNum = parseFloat(String(valor_pago).replace(',', '.'));
     if (!isNaN(valorNum) && valorNum > 0 && valorNum <= Number(preco || 0)) {
       if (this.socket?.connected) {
-        this.socket.emit('pagar_parcial', { valor_pago: valorNum, fcomanda });
+        this.socket.emit('pagar_parcial', {
+          valor_pago: valorNum,
+          fcomanda,
+          carrinho: this.getCarrinho(),
+        });
         this.safeSetState((prev) => ({ preco: (Number(prev.preco) || 0) - valorNum, valor_pago: '' }));
       } else {
         this.showConfirmToast('Sem conexão com o servidor.', 'error');

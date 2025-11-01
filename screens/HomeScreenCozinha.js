@@ -168,9 +168,10 @@ export default class HomeScreenCozinha extends React.Component {
 
     // 3) Primeiras cargas
     if (this.state.isConnected && this.socket?.connected) {
-      this.socket.emit('getCardapio', false);
-      this.socket.emit('getComandas', false);
-      this.socket.emit('getCarrinhos', false);
+      const carrinho = this.getCarrinho();
+      this.socket.emit('getCardapio', { emitir: false, carrinho });
+      this.socket.emit('getComandas', { emitir: false, carrinho });
+      this.socket.emit('getCarrinhos', { emitir: false, carrinho });
     } else {
       this.showConfirmToast('Sem internet. Tentando novamente quando voltar.', 'warning');
     }
@@ -239,9 +240,10 @@ export default class HomeScreenCozinha extends React.Component {
     this.showConfirmToast('Conectado novamente!', 'success');
     // revalida dados ao reconectar
     try {
-      this.socket?.emit('getCardapio', false);
-      this.socket?.emit('getComandas', false);
-      this.socket?.emit('getCarrinhos', false);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('getCardapio', { emitir: false, carrinho });
+      this.socket?.emit('getComandas', { emitir: false, carrinho });
+      this.socket?.emit('getCarrinhos', { emitir: false, carrinho });
     } catch {
       // ignore
     }
@@ -779,11 +781,8 @@ export default class HomeScreenCozinha extends React.Component {
       } = this.state;
       const currentTime = this.getCurrentTime();
 
-      const entregaMeta = {
-        modo_entrega: modoEntrega,
-        carrinho: modoEntrega === 'carrinho' ? carrinhoNome : '',
-        endereco: modoEntrega === 'residencial' ? enderecoEntrega : '',
-      };
+      const carrinhoDestino = modoEntrega === 'carrinho' ? carrinhoNome : '';
+      const enderecoDestino = modoEntrega === 'residencial' ? enderecoEntrega : '';
 
       // Carrinho com vários itens
       if (pedidosSelecionados.length && quantidadeSelecionada.length) {
@@ -813,7 +812,10 @@ export default class HomeScreenCozinha extends React.Component {
           username: username,
           opcoesSelecionadas: NovasSelecoes,
           token_user: user?.token,
-          ...entregaMeta,
+          modo_entrega: modoEntrega,
+          endereco: enderecoDestino,
+          carrinho_destino: carrinhoDestino,
+          carrinho: this.getCarrinho(),
         });
 
         if (!this._isMounted) return;
@@ -902,7 +904,10 @@ export default class HomeScreenCozinha extends React.Component {
             username: this.state.username,
             opcoesSelecionadas: selection,
             token_user: user?.token,
-            ...entregaMeta,
+            modo_entrega: modoEntrega,
+            endereco: enderecoDestino,
+            carrinho_destino: carrinhoDestino,
+            carrinho: this.getCarrinho(),
           });
 
           if (!this._isMounted) return;
