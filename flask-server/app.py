@@ -6,7 +6,7 @@ import unicodedata
 import matplotlib
 matplotlib.use('Agg')
 from flask import Flask, request, jsonify
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from cs50 import SQL
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
@@ -42,7 +42,7 @@ app = Flask(
 
 load_dotenv()
 app.config['SECRET_KEY'] = os.getenv("MOST_SECRET_KEY",'quero-quero17')
-socketio = SocketIO(app, cors_allowed_origins="*")  
+socketio = SocketIO(app, cors_allowed_origins="*")
 import shutil
 
 
@@ -64,6 +64,43 @@ CORS(
     allow_headers=["Content-Type", "Authorization"],
 )
 
+
+
+connected_carts = {}
+
+
+def _register_carrinho_room(carrinho):
+    """Associate the current Socket.IO session with a cart room."""
+    if not carrinho:
+        return None
+
+    try:
+        sid = getattr(request, 'sid', None)
+    except RuntimeError:
+        sid = None
+    if not sid:
+        return carrinho
+
+    current = connected_carts.get(sid)
+    if current == carrinho:
+        return carrinho
+
+    if current:
+        leave_room(current, sid=sid)
+
+    join_room(carrinho, sid=sid)
+    connected_carts[sid] = carrinho
+    return carrinho
+
+
+def emit_for_carrinho(event, payload, *, broadcast, carrinho=None, include_self=True):
+    """Emit helper that limits broadcasts to the caller's cart when requested."""
+    if broadcast and carrinho:
+        socketio.emit(event, payload, room=carrinho, include_self=include_self)
+    elif broadcast:
+        socketio.emit(event, payload, include_self=include_self)
+    else:
+        emit(event, payload, include_self=include_self)
 
 
 def decode_number_jwt(token: str) -> int:
@@ -284,7 +321,7 @@ def salvarTokenCargo():
 
     return "cargo e user inserido com sucesso"
 
-def enviar_notificacao_expo(cargo,titulo,corpo,token_user,canal="default", carrinho):
+def enviar_notificacao_expo(cargo,titulo,corpo,token_user,carrinho, canal="default"):
     print(f'cargo {cargo} titulo, {titulo},corpo {corpo} canal {canal}')
     if cargo:
         tokens = db.execute('SELECT token FROM tokens WHERE carrinho = ? AND cargo = ? AND token != ? GROUP BY token',carrinho,cargo,'semtoken')
@@ -539,18 +576,29 @@ def handle_connect():
 def getCardapio(data):
     emitirBroadcast = data.get('emitir')
     carrinho = data.get('carrinho')
+    _register_carrinho_room(carrinho)
     dataCardapio = db.execute("SELECT * FROM cardapio WHERE carrinho = ? ORDER BY item ASC", carrinho)
     if emitirBroadcast:
-        socketio.emit('respostaCardapio',{'dataCardapio':dataCardapio})
+        emit_for_carrinho('respostaCardapio', {'dataCardapio': dataCardapio}, broadcast=True, carrinho=carrinho)
     else:
-        emit('respostaCardapio',{'dataCardapio':dataCardapio},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaCardapio', {'dataCardapio': dataCardapio}, broadcast=False, carrinho=carrinho)
 
 @socketio.on('getCarrinhos')
-def getCarrinhos(emitirBroadcast):
+def getCarrinhos(data):
+    if isinstance(data, dict):
+        emitirBroadcast = data.get('emitir', True)
+        carrinho = data.get('carrinho')
+    else:
+        emitirBroadcast = data if isinstance(data, bool) else True
+        carrinho = None
+
+    if carrinho:
+        _register_carrinho_room(carrinho)
+
     carrinhos = db.execute('SELECT * FROM carrinhos')
     print('getCarrinhos')
     print('carrinhos',carrinhos)
-    emit('respostaCarrinhos',{'carrinhos':carrinhos},broadcast=emitirBroadcast)
+    emit_for_carrinho('respostaCarrinhos', {'carrinhos': carrinhos}, broadcast=emitirBroadcast, carrinho=carrinho)
 
 
 @socketio.on('getPedidosCC')
@@ -562,17 +610,18 @@ def getPedidosCC(data):
     else:
         emitirBroadcast = data if isinstance(data, bool) else True
         carrinho = 'NossoPoint'
-    
+
     print('emitirBroadcast', emitirBroadcast)
     print('carrinho', carrinho)
+    _register_carrinho_room(carrinho)
     dia = datetime.now(brazil).date()
     dataPedidos = db.execute('SELECT * FROM pedidos WHERE dia = ? AND pedido != ? AND carrinho = ?',dia,'Comanda Aberta',carrinho)
     if not dataPedidos:
         dataPedidos = []
     if emitirBroadcast:
-        socketio.emit('respostaPedidosCC',{'dataPedidos':dataPedidos})
+        emit_for_carrinho('respostaPedidosCC', {'dataPedidos': dataPedidos}, broadcast=True, carrinho=carrinho)
     else:
-        emit('respostaPedidosCC',{'dataPedidos':dataPedidos},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaPedidosCC', {'dataPedidos': dataPedidos}, broadcast=False, carrinho=carrinho)
 
 @socketio.on('getPedidos')
 def getPedidos(data):
@@ -582,39 +631,43 @@ def getPedidos(data):
         carrinho = data.get('carrinho')
     print('emitirBroadcast', emitirBroadcast)
     print('carrinho', carrinho)
+    _register_carrinho_room(carrinho)
     dia = datetime.now(brazil).date()
     dataPedidos = db.execute('SELECT * FROM pedidos WHERE dia = ? AND pedido != ? AND carrinho = ?',dia,'Comanda Aberta',carrinho)
     if not dataPedidos:
         dataPedidos = []
     if emitirBroadcast:
-        socketio.emit('respostaPedidos',{'dataPedidos':dataPedidos})
+        emit_for_carrinho('respostaPedidos', {'dataPedidos': dataPedidos}, broadcast=True, carrinho=carrinho)
     else:
-        emit('respostaPedidos',{'dataPedidos':dataPedidos},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaPedidos', {'dataPedidos': dataPedidos}, broadcast=False, carrinho=carrinho)
 
 @socketio.on('getItensPromotion')
 def getPedidosPromotion(data):
     #!!
     emitirBroadcast=data.get('emitir')
     carrinho = data.get("carrinho")
+    _register_carrinho_room(carrinho)
     dataCardapio = db.execute('SELECT id,item FROM cardapio WHERE carrinho = ?', carrinho)
     if dataCardapio:
-        emit('respostaItensPromotion',{'dataCardapio':dataCardapio},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaItensPromotion', {'dataCardapio': dataCardapio}, broadcast=emitirBroadcast, carrinho=carrinho)
 
 @socketio.on('getEstoque')
 def getEstoque(data):
     emitirBroadcast=data.get('emitir')
     carrinho=data.get('carrinho')
+    _register_carrinho_room(carrinho)
     dataEstoque=db.execute('SELECT * FROM estoque WEHRE carrinho = ? ORDER BY item', carrinho)
     if dataEstoque:
-        emit('respostaEstoque',{'dataEstoque':dataEstoque},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaEstoque', {'dataEstoque': dataEstoque}, broadcast=emitirBroadcast, carrinho=carrinho)
 
 @socketio.on('getEstoqueGeral')
 def getEstoqueGeral(data):
     emitirBroadcast=data.get('emitir')
     carrinho=data.get('carrinho')
+    _register_carrinho_room(carrinho)
     dataEstoqueGeral=db.execute('SELECT * FROM estoque_geral WHERE carrinho = ? ORDER BY item', carrinho)
     if dataEstoqueGeral:
-        emit('respostaEstoqueGeral',{'dataEstoqueGeral':dataEstoqueGeral},broadcast=emitirBroadcast)
+        emit_for_carrinho('respostaEstoqueGeral', {'dataEstoqueGeral': dataEstoqueGeral}, broadcast=emitirBroadcast, carrinho=carrinho)
 
 
 @socketio.on('getComandas')
@@ -622,7 +675,8 @@ def getComandas(data):
     if isinstance(data, dict):
         emitirBroadcast = data.get('emitir', True)
         carrinho = data.get('carrinho')
-    
+
+    _register_carrinho_room(carrinho)
     dia = datetime.now(brazil).date()
     sql_abertas = """
         SELECT comanda
@@ -642,21 +696,30 @@ def getComandas(data):
         'SELECT comanda,ordem FROM pedidos WHERE ordem !=? AND dia = ? AND carrinho = ? GROUP BY comanda ORDER BY comanda ASC', 0,dia, carrinho)
     if dados_comandaAberta or dados_comandaFechada:
         if emitirBroadcast:
-            socketio.emit('respostaComandas', {'dados_comandaAberta':dados_comandaAberta,'dados_comandaFechada':dados_comandaFechada})
+            emit_for_carrinho('respostaComandas', {'dados_comandaAberta': dados_comandaAberta, 'dados_comandaFechada': dados_comandaFechada}, broadcast=True, carrinho=carrinho)
         else:
-            emit('respostaComandas', {'dados_comandaAberta':dados_comandaAberta,'dados_comandaFechada':dados_comandaFechada},broadcast=emitirBroadcast)
+            emit_for_carrinho('respostaComandas', {'dados_comandaAberta': dados_comandaAberta, 'dados_comandaFechada': dados_comandaFechada}, broadcast=False, carrinho=carrinho)
 
 
 @socketio.on('users')
 def users(data):
     emitirBroadcast=data.get('emitir')
     carrinho=data.get('carrinho')
+    _register_carrinho_room(carrinho)
     users = db.execute('SELECT * from usuarios WHERE carrinho = ?', carrinho)
-    emit('usuarios',{'users': users},broadcast=emitirBroadcast)
+    emit_for_carrinho('usuarios', {'users': users}, broadcast=emitirBroadcast, carrinho=carrinho)
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    try:
+        sid = getattr(request, 'sid', None)
+    except RuntimeError:
+        sid = None
+    if sid:
+        carrinho = connected_carts.pop(sid, None)
+        if carrinho:
+            leave_room(carrinho, sid=sid)
     print('Cliente desconectado')
 
 # Manipulador para inserir dados
@@ -853,6 +916,7 @@ def handle_insert_order(data):
         nomes         = to_list(data.get('nomeSelecionado'))
         token_user    = data.get('token_user')
         carrinho      = data.get('carrinho')
+        _register_carrinho_room(carrinho)
 
         # opções estruturadas (podem vir str/json/list/dict)
         opcoesSelecionadas = parse_json_maybe(data.get('opcoesSelecionadas')) or []
@@ -1042,24 +1106,30 @@ def handle_insert_order(data):
             if categoria == 1:
                 new_id = db.execute("SELECT last_insert_rowid() AS id")[0]['id']
                 hora   = datetime.now(brazil).strftime('%H:%M')
-                emit('emitir_pedido_restante',
-                     {'mesa': comanda, 'pedido': pedido, 'quantidade': quantidade,
-                      'extra': extra_txt, 'hora': hora, 'sendBy': username, 'id': new_id},
-                     broadcast=True)
+                emit_for_carrinho(
+                    'emitir_pedido_restante',
+                    {'mesa': comanda, 'pedido': pedido, 'quantidade': quantidade,
+                     'extra': extra_txt, 'hora': hora, 'sendBy': username, 'id': new_id},
+                    broadcast=True,
+                    carrinho=carrinho,
+                )
             elif categoria == 3:
                 new_id = db.execute("SELECT last_insert_rowid() AS id")[0]['id']
                 hora   = datetime.now(brazil).strftime('%H:%M')
-                emit('emitir_pedido_cozinha',
-                     {'mesa': comanda, 'pedido': pedido, 'quantidade': quantidade,'remetente': remetente, 'endereco_entrega': endereco_entrega,'prazo': horario_entrega,
-                      'extra': extra_txt, 'hora': hora, 'sendBy': username, 'id': new_id},
-                     broadcast=True)
+                emit_for_carrinho(
+                    'emitir_pedido_cozinha',
+                    {'mesa': comanda, 'pedido': pedido, 'quantidade': quantidade,'remetente': remetente, 'endereco_entrega': endereco_entrega,'prazo': horario_entrega,
+                     'extra': extra_txt, 'hora': hora, 'sendBy': username, 'id': new_id},
+                    broadcast=True,
+                    carrinho=carrinho,
+                )
 
             quantidade_anterior = db.execute('SELECT quantidade FROM estoque WHERE item = ? AND carrinho = ?', pedido, carrinho)
             if quantidade_anterior:
                 quantidade_nova = float(quantidade_anterior[0]['quantidade']) - quantidade
                 db.execute('UPDATE estoque SET quantidade = ? WHERE item = ? AND carrinho = ?', quantidade_nova, pedido, carrinho)
                 if quantidade_nova < 10:
-                    emit('alerta_restantes', {'quantidade': quantidade_nova, 'item': pedido}, broadcast=True)
+                    emit_for_carrinho('alerta_restantes', {'quantidade': quantidade_nova, 'item': pedido}, broadcast=True, carrinho=carrinho)
                 getEstoque({'emitir':True,'carrinho':carrinho})
 
         # Atualizações finais
@@ -1088,6 +1158,9 @@ def faturamento(data):
         dia = datetime.now(brazil).date()
         emitir = data if isinstance(data, bool) else True
         dia_formatado = dia.strftime('%d/%m')
+        carrinho = 'NossoPoint'
+
+    _register_carrinho_room(carrinho)
         
     metodosDict=db.execute("SELECT forma_de_pagamento,SUM(valor_total) AS valor_total FROM pagamentos WHERE dia =? AND carrinho = ? GROUP BY forma_de_pagamento",dia,carrinho)
     dinheiro=0
@@ -1143,24 +1216,26 @@ def faturamento(data):
     vendas_user =db.execute('SELECT username, SUM(preco_unitario *NULLIF(quantidade,0)) AS valor_vendido, SUM(quantidade)  AS quant_vendida FROM pedidos WHERE dia = ? AND carrinho = ? GROUP BY username ORDER BY SUM(preco_unitario*NULLIF(quantidade,0)) DESC',dia, carrinho)
     print('vendas_user', vendas_user)
 
-    emit('faturamento_enviar', {'dia': str(dia_formatado),
-                                'faturamento': total_recebido,
-                                'faturamento_previsto': faturamento_previsto,
-                                'drink': drink,
-                                'porcao': porcao,
-                                "restante": restante,
-                                "pedidos": pedidos,
-                                "caixinha": caixinha,
-                                "dezporcento":dezporcento,
-                                "desconto":desconto,
-                                "pix":pix,
-                                "debito":debito,
-                                "credito":credito,
-                                "dinheiro":dinheiro,
-                                "vendas_user":vendas_user
-                                },
+    emit_for_carrinho(
+        'faturamento_enviar',
+        {'dia': str(dia_formatado),
+         'faturamento': total_recebido,
+         'faturamento_previsto': faturamento_previsto,
+         'drink': drink,
+         'porcao': porcao,
+         "restante": restante,
+         "pedidos": pedidos,
+         "caixinha": caixinha,
+         "dezporcento": dezporcento,
+         "desconto": desconto,
+         "pix": pix,
+         "debito": debito,
+         "credito": credito,
+         "dinheiro": dinheiro,
+         "vendas_user": vendas_user},
         broadcast=emitir,
-        )
+        carrinho=carrinho,
+    )
     
 
 
@@ -1525,6 +1600,7 @@ def handle_delete_comanda(data):
         #!!
         dia = datetime.now(brazil).date()
         carrinho = data.get('carrinho')  # valor padrão
+        _register_carrinho_room(carrinho)
         
         # Identificar a comanda recebida
         comanda = data.get('fcomanda')
@@ -1554,7 +1630,7 @@ def handle_delete_comanda(data):
         getComandas({'emitir': True, 'carrinho': carrinho})
         getPedidos({'emitir': True, 'carrinho': carrinho})
         handle_get_cardapio(comanda, carrinho)
-        emit('comanda_deleted', {'fcomanda': comanda}, broadcast=True)
+        emit_for_carrinho('comanda_deleted', {'fcomanda': comanda}, broadcast=True, carrinho=carrinho)
 
     except Exception as e:
         print("Erro ao apagar comanda:", e)
@@ -1842,7 +1918,9 @@ def handle_get_cardapio(data, carrinho_param=None):
             # Se carrinho_param foi passado, use ele (prioridade)
             if carrinho_param:
                 carrinho = carrinho_param
-                
+
+        _register_carrinho_room(carrinho)
+
         if ordem == 0:
             valor_pago = db.execute('SELECT SUM(valor) AS total FROM pagamentos WHERE comanda = ? AND ordem = ? AND dia = ? AND tipo = ? AND carrinho = ?', fcomanda, ordem,dia,'normal',carrinho)
             print('valor_pago', valor_pago)
@@ -1875,20 +1953,20 @@ def handle_get_cardapio(data, carrinho_param=None):
                 if not nomes or not nomes[0]['nome']:
                     nomes = []
                 preco_a_pagar = preco_total-preco_pago-desconto_valor
-                socketio.emit('preco', {'preco_a_pagar': preco_a_pagar, 'preco_total': preco_total, 'preco_pago': preco_pago,
-                               'dados': dados, 'comanda': fcomanda, 'nomes': nomes, 'desconto': desconto_valor})
+                emit_for_carrinho('preco', {'preco_a_pagar': preco_a_pagar, 'preco_total': preco_total, 'preco_pago': preco_pago,
+                               'dados': dados, 'comanda': fcomanda, 'nomes': nomes, 'desconto': desconto_valor}, broadcast=True, carrinho=carrinho)
             else:
                 print('primeiro else')
-                socketio.emit('preco', {'preco_a_pagar': 0, 'preco_total': 0, 'preco_pago': 0, 'dados': [], 'nomes': [],
-                               'comanda': fcomanda})
+                emit_for_carrinho('preco', {'preco_a_pagar': 0, 'preco_total': 0, 'preco_pago': 0, 'dados': [], 'nomes': [],
+                               'comanda': fcomanda}, broadcast=True, carrinho=carrinho)
         else:
             print('segundo else')
             dados = db.execute('''
                     SELECT pedido,id,ordem,nome,extra,opcoes, SUM(quantidade) AS quantidade, SUM(quantidade_paga) as quantidade_paga, SUM(preco) AS preco
                     FROM pedidos WHERE comanda =? AND ordem = ? AND dia = ? AND carrinho = ? GROUP BY pedido, preco_unitario
                 ''', fcomanda, ordem,dia, carrinho)
-            socketio.emit('preco', {'preco_a_pagar': 0, 'preco_total': 0, 'preco_pago': 0, 'dados': dados, 'nomes': '',
-                           'comanda': fcomanda})
+            emit_for_carrinho('preco', {'preco_a_pagar': 0, 'preco_total': 0, 'preco_pago': 0, 'dados': dados, 'nomes': '',
+                           'comanda': fcomanda}, broadcast=True, carrinho=carrinho)
 
 
     except Exception as e:
@@ -2209,6 +2287,7 @@ def insertAlteracoesTable(tabela,alteracao,tipo,tela,usuario, carrinho):
 def getAlteracoes(data):
     carrinho = data.get('carrinho')
     emitir = data.get('emitir')
+    _register_carrinho_room(carrinho)
     print("Entrou GEtalteracoes")
     if type(emitir)!=bool:
         emiti=emitir.get('emitir')
@@ -2221,7 +2300,7 @@ def getAlteracoes(data):
         dia_mes = hoje.strftime('%d/%m')
 
     data=db.execute("SELECT * FROM alteracoes WHERE dia = ? AND carrinho = ?",hoje, carrinho)
-    emit('respostaAlteracoes', {"alteracoes":data,"hoje":str(dia_mes)}, broadcast=emiti)
+    emit_for_carrinho('respostaAlteracoes', {"alteracoes":data,"hoje":str(dia_mes)}, broadcast=emiti, carrinho=carrinho)
 
 @socketio.on('faturamento_range')
 def faturamento_range(data):
@@ -2232,14 +2311,16 @@ def faturamento_range(data):
     emitir    = bool((data or {}).get('emitir', False))
     carrinho  = (data or {}).get('carrinho')
 
+    _register_carrinho_room(carrinho)
+
     if not date_from or not date_to:
-        emit('faturamento_enviar', {
+        emit_for_carrinho('faturamento_enviar', {
             'dia': 'Período inválido',
             'faturamento': 0, 'faturamento_previsto': 0,
             'drink': 0, 'porcao': 0, 'restante': 0, 'pedidos': 0,
             'caixinha': 0, 'dezporcento': 0, 'desconto': 0,
             'pix': 0, 'debito': 0, 'credito': 0, 'dinheiro': 0
-        }, broadcast=False)
+        }, broadcast=False, carrinho=carrinho)
         return
 
     # Garante formato AAAA-MM-DD e troca se vier invertido
@@ -2248,13 +2329,13 @@ def faturamento_range(data):
         df = datetime.strptime(date_from, '%Y-%m-%d').date()
         dt = datetime.strptime(date_to,   '%Y-%m-%d').date()
     except ValueError:
-        emit('faturamento_enviar', {
+        emit_for_carrinho('faturamento_enviar', {
             'dia': 'Formato de data inválido (use YYYY-MM-DD)',
             'faturamento': 0, 'faturamento_previsto': 0,
             'drink': 0, 'porcao': 0, 'restante': 0, 'pedidos': 0,
             'caixinha': 0, 'dezporcento': 0, 'desconto': 0,
             'pix': 0, 'debito': 0, 'credito': 0, 'dinheiro': 0
-        }, broadcast=False)
+        }, broadcast=False, carrinho=carrinho)
         return
 
     if df > dt:
@@ -2336,7 +2417,7 @@ def faturamento_range(data):
     vendas_user =db.execute('SELECT username, SUM(preco_unitario*NULLIF(quantidade,0)) AS valor_vendido, SUM(quantidade)  AS quant_vendida FROM pedidos WHERE dia BETWEEN ? AND ? AND pedido!= ? AND carrinho = ? GROUP BY username ORDER BY SUM(preco_unitario*NULLIF(quantidade,0)) DESC',date_from,date_to,'Comanda Aberta', carrinho)
     print('vendas_user', vendas_user)
 
-    emit('faturamento_enviar', {
+    emit_for_carrinho('faturamento_enviar', {
         'dia': periodo_fmt,
         'faturamento': total_recebimentos,
         'faturamento_previsto': faturamento_previsto,
@@ -2352,7 +2433,7 @@ def faturamento_range(data):
         "credito": credito,
         "dinheiro": dinheiro,
         "vendas_user": vendas_user
-    }, broadcast=emitir)
+    }, broadcast=emitir, carrinho=carrinho)
 
 
 import re
@@ -2413,9 +2494,19 @@ def pagar_itens(data):
 
 
 @socketio.on('buscar_menu_data')
-def buscar_menu_data(emitir_broadcast):
+def buscar_menu_data(payload):
     try:
         print('entrou buscar menu data')
+
+        if isinstance(payload, dict):
+            emitir_broadcast = payload.get('emitir', True)
+            carrinho = payload.get('carrinho')
+        else:
+            emitir_broadcast = bool(payload)
+            carrinho = None
+
+        if carrinho:
+            _register_carrinho_room(carrinho)
 
         data_geral = db.execute(
             '''
@@ -2476,7 +2567,7 @@ def buscar_menu_data(emitir_broadcast):
 
             })
 
-        emit('menuData', data_geral_atualizado, broadcast=emitir_broadcast)
+        emit_for_carrinho('menuData', data_geral_atualizado, broadcast=emitir_broadcast, carrinho=carrinho)
 
     except Exception as e:
         print('erro ao buscar_menu_data:', e)
@@ -2563,8 +2654,9 @@ def getPromotions(data):
     print('entrou getPromotions')
     emitirBroadcast = data.get('emitir')
     carrinho = data.get('carrinho')
+    _register_carrinho_room(carrinho)
     dados = db.execute('SELECT * FROM promotions WHERE carrinho = ?', carrinho)
-    emit('promotionsData',dados,broadcast=emitirBroadcast)
+    emit_for_carrinho('promotionsData', dados, broadcast=emitirBroadcast, carrinho=carrinho)
 
 
 @socketio.on('invocar_atendente')
