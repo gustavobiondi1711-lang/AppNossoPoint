@@ -215,7 +215,8 @@ export default class Cozinha extends React.Component {
   refreshData = () => {
     if (this.state.refreshing) return; // anti-spam
     this.setState({ refreshing: true }, () => {
-      this.socket?.emit('getPedidosCC', false);
+      const carrinho = this.getCarrinho();
+      this.socket?.emit('getPedidosCC', { emitir: false, carrinho });
       if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
       // fallback p/ rede instável
       this.refreshTimeout = setTimeout(() => {
@@ -231,7 +232,7 @@ export default class Cozinha extends React.Component {
     if (this.state.pendingIds[id]) return;
 
     this.setState((prev) => ({ pendingIds: { ...prev.pendingIds, [id]: true } }), () => {
-      this.socket?.emit('inserir_preparo', { id, estado });
+      this.socket?.emit('inserir_preparo', { id, estado, carrinho: this.getCarrinho() });
 
       // Solta lock sozinho, mesmo que backend não responda
       setTimeout(() => {

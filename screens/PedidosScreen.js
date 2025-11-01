@@ -80,6 +80,11 @@ export default class PedidosScreen extends React.Component {
     this._netinfoUnsub = null;
   }
 
+  getCarrinho() {
+    const { user } = this.context || {};
+    return user?.carrinho || '';
+  }
+
   // ------- guards contra cliques rápidos -------
   guard = (key, fn, cooldown = 280) => {
     if (this._guards[key]) return;
@@ -213,10 +218,11 @@ export default class PedidosScreen extends React.Component {
       const { user } = this.context || {};
       this.safeSetState({ refreshing: true }, () => {
         try {
+          const carrinho = this.getCarrinho();
           if (user?.cargo !== 'Cozinha') {
-            this.socket.emit('getPedidos', false);
+            this.socket.emit('getPedidos', { emitir: false, carrinho });
           } else {
-            this.socket.emit('getPedidosCC', true);
+            this.socket.emit('getPedidosCC', { emitir: true, carrinho });
           }
           // fallback para não travar o spinner
           if (this._refreshTimeout) clearTimeout(this._refreshTimeout);
@@ -385,6 +391,7 @@ export default class PedidosScreen extends React.Component {
             pedidoAlterado: payload,
             usuario: user?.username,
             token: user?.token,
+            carrinho: this.getCarrinho(),
           });
           this.safeSetState({ editable: false, showModal: false, pedidoModal: {} });
         } catch {
@@ -415,6 +422,7 @@ export default class PedidosScreen extends React.Component {
             comanda: item.comanda,
             usuario: user?.username,
             token: user?.token,
+            carrinho: this.getCarrinho(),
           });
         }
         // feedback otimista (printed = 1)
@@ -458,6 +466,7 @@ export default class PedidosScreen extends React.Component {
           comanda: item.comanda,
           usuario: user?.username,
           token: user?.token,
+          carrinho: this.getCarrinho(),
         });
 
         // feedback otimista

@@ -347,7 +347,7 @@ export default class EstoqueScreen extends React.Component {
         itensAlterados,
         username: user?.username,
         token: user?.token,
-        carrinho: user?.carrinho,
+        carrinho: this.getCarrinho(),
       });
       this.setState({ showEditar: false });
       this.itensAlteradosMap.clear();
@@ -400,7 +400,7 @@ export default class EstoqueScreen extends React.Component {
         username: user?.username,
         token: user?.token,
         mudar_os_dois: emAmbos,
-        carrinho: user?.carrinho,
+        carrinho: this.getCarrinho(),
       });
 
       this.setState({

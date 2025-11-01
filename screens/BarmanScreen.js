@@ -147,7 +147,8 @@ export default class BarmanScreen extends React.Component {
     this.socket = getSocket();
 
     if (this.socket) {
-      this.socket.emit('getPedidos', false);
+      const carrinho = this.getCarrinho();
+      this.socket.emit('getPedidos', { emitir: false, carrinho });
       this.socket.on('respostaPedidos', this.handleRespostaPedidos);
       this.socket.on('ingrediente', this.handleIngrediente);
 
@@ -326,7 +327,8 @@ export default class BarmanScreen extends React.Component {
   refreshData = () => {
     if (!this.socket) return;
     this.safeSetState({ refreshing: true }, () => {
-      this.socket.emit('getPedidos', false);
+      const carrinho = this.getCarrinho();
+      this.socket.emit('getPedidos', { emitir: false, carrinho });
       // fallback para nunca travar o spinner se nada voltar
       if (this._refreshTimeout) clearTimeout(this._refreshTimeout);
       this._refreshTimeout = setTimeout(() => {
@@ -346,7 +348,7 @@ export default class BarmanScreen extends React.Component {
 
     try {
       // pode-se adaptar para usar ACK do socket se disponível
-      this.socket.emit('inserir_preparo', { id, estado });
+      this.socket.emit('inserir_preparo', { id, estado, carrinho: this.getCarrinho() });
     } finally {
       // libera após pequeno intervalo para evitar clique duplo
       setTimeout(() => {
@@ -368,7 +370,7 @@ export default class BarmanScreen extends React.Component {
 
     this.safeSetState({ showModal: true, loadingIng: true, ingredientes: [] }, () => {
       if (this.socket) {
-        this.socket.emit('get_ingredientes', { ingrediente: pedidoNome });
+        this.socket.emit('get_ingredientes', { ingrediente: pedidoNome, carrinho: this.getCarrinho() });
       } else {
         this.safeSetState({ loadingIng: false });
       }
