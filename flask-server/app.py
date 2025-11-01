@@ -2134,7 +2134,7 @@ def editarCardapio(data):
             _sync_opcoes_rows(id_cardapio, chaveBusca, grupos, carrinho)
         elif novoNome:
             # só renomeou item — reflita em `opcoes.item`
-            db.execute("UPDATE opcoes SET item = ? WHERE id_cardapio = ? AND carrinho ", chaveBusca, id_cardapio, carrinho)
+            db.execute("UPDATE opcoes SET item = ? WHERE id_cardapio = ? AND carrinho = ?", chaveBusca, id_cardapio, carrinho)
 
     # log diffs
     alteracoes = f'{item}, '
@@ -2907,6 +2907,7 @@ def opcoes_aggregate():
     grupo_slug = (request.args.get("grupo_slug") or "").strip().lower()
     somente_esgotados = _parse_bool(request.args.get("somente_esgotados"))
     somente_extra_positivo = _parse_bool(request.args.get("somente_extra_positivo"))
+    carrinho = (request.args.get("carrinho") or "").strip()
     try:
         limit = int(request.args.get("limit") or 100)
     except Exception:
@@ -2914,8 +2915,8 @@ def opcoes_aggregate():
     limit = max(1, min(limit, 500))
 
     # Filtros dinâmicos (base)
-    wh = ["1=1"]
-    base_params = {}
+    wh = ["carrinho = :carrinho"]
+    base_params = {"carrinho":carrinho}
 
     if grupo_slug:
         wh.append("grupo_slug = :gslug")
@@ -3017,7 +3018,7 @@ def opcoes_bulk_update():
 
     data = request.get_json(force=True) or {}
     where = data.get("where") or {}
-    carrinho = data.get('carrinho')
+    carrinho = (data.get('carrinho') or "")
     set_ = data.get("set") or {}
     restrict_items = data.get("restrict_items") or []
     dry_run = bool(data.get("dry_run"))
@@ -3044,8 +3045,8 @@ def opcoes_bulk_update():
         return jsonify({"error": "Inclua pelo menos um campo em 'set' (valor_extra/esgotado)."}), 400
 
     # Filtro base
-    wh = ["grupo_slug = :gs", "opcao_slug = :os"]
-    params = {"gs": gslug, "os": oslug, "carrinho":carrinho}
+    wh = ["grupo_slug = :gs", "opcao_slug = :os", "carrinho = :carrinho"]
+    params = {"gs": gslug, "os": oslug, "carrinho": carrinho}
 
     # Restrição opcional por itens (id_cardapio)
     ids = []
@@ -3062,7 +3063,7 @@ def opcoes_bulk_update():
 
     # Impacto
     rows = db.execute(
-        f"SELECT id_cardapio FROM opcoes WHERE {where_sql} AND carrinho = ?",
+        f"SELECT id_cardapio FROM opcoes WHERE {where_sql}",
         **params) or []
     matched = len(rows)
     items = sorted(list({r["id_cardapio"] for r in rows}))
@@ -3088,7 +3089,7 @@ def opcoes_bulk_update():
 
     db.execute("BEGIN")
     try:
-        sql = f"UPDATE opcoes SET {', '.join(set_clauses)} WHERE {where_sql} AND carrinho = ?"
+        sql = f"UPDATE opcoes SET {', '.join(set_clauses)} WHERE {where_sql}"
         db.execute(sql, **set_params, **params)
         updated = matched  # cs50/SQLite não dá rowcount confiável
 
@@ -3255,7 +3256,7 @@ def opcoes_group_props_bulk():
     set_ = data.get("set") or {}
     restrict_items = data.get("restrict_items") or []
     dry_run = bool(data.get("dry_run"))
-    carrinho = data.get('carrinho')
+    carrinho = (data.get('carrinho') or "")
     gslug = (where.get("grupo_slug") or "").strip().lower()
     if not gslug:
         return jsonify({"error": "where.grupo_slug é obrigatório."}), 400
@@ -3284,7 +3285,7 @@ def opcoes_group_props_bulk():
         return jsonify({"error": "Inclua pelo menos um campo em 'set' (max_selected/obrigatorio/ids)."}), 400
 
     # Monta filtro base para descobrir itens que possuem esse grupo
-    wh = ["grupo_slug = :gs"]
+    wh = ["grupo_slug = :gs", "carrinho = :carrinho"]
     params = {"gs": gslug, "carrinho": carrinho}
 
     ids = []
@@ -3304,7 +3305,7 @@ def opcoes_group_props_bulk():
         f"""
         SELECT DISTINCT id_cardapio
         FROM opcoes
-        WHERE {where_sql} AND carrinho = :carrinho
+        WHERE {where_sql}
         ORDER BY id_cardapio
         """,
         **params
@@ -3326,8 +3327,8 @@ def opcoes_group_props_bulk():
         for iid in items:
             # Nome do grupo desse item (para casar com JSON)
             gr = db.execute(
-                "SELECT MIN(nome_grupo) AS nome FROM opcoes WHERE id_cardapio = :id AND grupo_slug = :gs",
-                id=iid, gs=gslug
+                "SELECT MIN(nome_grupo) AS nome FROM opcoes WHERE id_cardapio = :id AND grupo_slug = :gs AND carrinho = :carrinho",
+                id=iid, gs=gslug, carrinho = carrinho
             )
             group_name = (gr[0]["nome"] if gr and gr[0]["nome"] else "").strip()
             if not group_name:
@@ -3358,7 +3359,7 @@ def opcoes_group_props_bulk():
 
             if changed:
                 new_str = json.dumps(data_json, ensure_ascii=False)
-                db.execute("UPDATE cardapio SET opcoes = :j WHERE id = :id", j=new_str, id=iid)
+                db.execute("UPDATE cardapio SET opcoes = :j WHERE id = :id AND carrinho = :carrinho", j=new_str, id=iid, carrinho=carrinho)
                 getCardapio(True)  # broadcast atualização do cardápio
 
         # Auditoria (reuso da tabela existente)
